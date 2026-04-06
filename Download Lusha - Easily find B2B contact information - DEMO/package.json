@@ -1,0 +1,17 @@
+{
+  "name": "lushaplugin",
+  "version": "10.6.0",
+  "description": "Lusha is the easiest way to find B2B contact information with just one click.",
+  "author": "Lusha",
+  "license": "ISC",
+  "dependencies": {
+    "debounce": "^1.2.0",
+    "detect-browser": "^5.2.0",
+    "iframe-resizer": "^4.3.1",
+    "jquery": "^3.6.0",
+    "jquery-ui": "^1.12.1",
+    "lodash": "^4.17.23",
+    "lzutf8": "^0.5.5",
+    "uuid": "^7.0.0"
+  }
+}

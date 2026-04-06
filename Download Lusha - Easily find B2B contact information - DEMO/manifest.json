@@ -1,0 +1,96 @@
+{
+"update_url": "https://clients2.google.com/service/update2/crx",
+
+  "name": "Lusha - Easily find B2B contact information",
+  "manifest_version": 3,
+  "short_name": "Lusha",
+  "author": "Lusha",
+  "description": "Get access to the world’s most accurate global B2B data.",
+  "version": "10.6.0",
+  "minimum_chrome_version": "102",
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "frame.html",
+        "images/lushaIcon.png",
+        "images/lushaIcon2.png",
+        "images/lushalogo.png",
+        "images/lusha_loader.gif",
+        "images/lushaBlueIcon.svg"
+      ],
+      "matches": [
+        "<all_urls>"
+      ],
+      "extension_ids": []
+    }
+  ],
+  "action": {
+    "default_icon": {
+      "16": "images/icon16.png",
+      "20": "images/icon20.png",
+      "24": "images/icon24.png",
+      "25": "images/icon25.png",
+      "30": "images/icon30.png",
+      "32": "images/icon32.png",
+      "40": "images/icon40.png",
+      "48": "images/icon48.png"
+    },
+    "default_title": "Lusha",
+    "default_popup": "popup.html"
+  },
+  "icons": {
+    "16": "images/icon16.png",
+    "20": "images/icon20.png",
+    "24": "images/icon24.png",
+    "25": "images/icon25.png",
+    "30": "images/icon30.png",
+    "32": "images/icon32.png",
+    "40": "images/icon40.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png",
+    "176": "images/icon176.png"
+  },
+  "permissions": [
+    "tabs",
+    "storage",
+    "scripting"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'",
+    "sandbox": "sandbox allow-scripts allow-popups allow-top-navigation"
+  },
+  "host_permissions": [
+    "https://*.lusha.co/*",
+    "https://*.linkedin.com/*",
+    "https://*.salesforce.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*.lightning.force.com/*",
+    "https://*.mail.google.com/*",
+    "*://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://dashboard.lusha.com/*",
+        "https://*.linkedin.com/*",
+        "https://*.salesforce.com/*"
+      ],
+      "exclude_matches": [
+        "https://www.lusha.co/*",
+        "https://www.lusha.com/*",
+        "https://www.salesforce.com/*",
+        "https://*.lightning.force.com/*",
+        "https://*.mail.google.com/*"
+      ],
+      "js": [
+        "content.js",
+        "assets.js"
+      ],
+      "run_at": "document_end"
+    }
+  ]
+}
