@@ -4,8 +4,8 @@
   "manifest_version": 3,
   "name": "Email Finder by ContactOut – Email Lookup Tool",
   "short_name": "Contact Out",
-  "description": "Find emails for 75% of Linkedin or ANY website. Save profiles to CRM. Chatgpt comments & email writer. Trusted by 76% of Fortune500.",
-  "version": "5.16.8",
+  "description": "Find emails for 75% of Linkedin or ANY website. Save profiles to CRM. Chatgpt comments & email writer. Trusted by 76% of Fortune500. Now with Calendar, HubSpot, and Scout mode.",
+  "version": "5.17.0",
   "options_page": "assets/pages/options.html",
   "action": {
     "default_icon": "assets/icons/icon.png",
@@ -89,6 +89,38 @@
       "js": ["/app/linkedin_logout.js"],
       "run_at": "document_end",
       "all_frames": true
+    },
+    {
+      "matches": [
+        "*://calendar.google.com/*",
+        "*://outlook.live.com/calendar/*",
+        "*://outlook.office.com/calendar/*",
+        "*://outlook.office365.com/calendar/*"
+      ],
+      "js": ["/app/calendar_integration.js"],
+      "run_at": "document_end"
+    },
+    {
+      "matches": [
+        "*://*.hubspot.com/*"
+      ],
+      "js": ["/app/hubspot_integration.js"],
+      "run_at": "document_end"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "exclude_matches": [
+        "*://*.linkedin.com/*",
+        "*://contactout.com/*",
+        "https://github.com/*",
+        "*://calendar.google.com/*",
+        "*://outlook.live.com/*",
+        "*://outlook.office.com/*",
+        "*://outlook.office365.com/*",
+        "*://*.hubspot.com/*"
+      ],
+      "js": ["/app/scout_mode.js"],
+      "run_at": "document_end"
     }
   ],
   "permissions": [
@@ -98,14 +130,20 @@
     "cookies",
     "storage",
     "alarms",
-    "system.display"
+    "system.display",
+    "tabs"
   ],
   "host_permissions": [
     "https://contactout.com/",
     "https://*.linkedin.com/",
-    "https://github.com/"
+    "https://github.com/",
+    "https://calendar.google.com/",
+    "https://outlook.live.com/",
+    "https://outlook.office.com/",
+    "https://outlook.office365.com/",
+    "https://*.hubspot.com/"
   ],
-  "optional_permissions": ["tabs"],
+  "optional_permissions": [],
   "optional_host_permissions": [
     "https://*.lightning.force.com/*",
     "https://*.salesforce.com/*",
