@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>ContactOut Options</title>
+
+	<link rel="stylesheet" href="../css/reset.css">
+	<link rel="stylesheet" href="../css/options.css">
+  </head>
+  <body>
+
+	<div class="main">
+		<div class="main__header">
+			<img src="../icons/icon32.png" class="main__logo" />
+			<div class="main__header-link main__header-link--active">
+				Settings
+			</div>
+		</div>
+		<div class="settings">
+			<label class="settings__title">
+				Default behavior
+			</label>
+
+			<label class="settings__label">
+				These default behaviors can be overridden
+			</label>
+
+			<div class="settings__row">
+				<label class="settings__label settings__label--inline">
+					<div class="settings__form-checkbox">
+						<input type="checkbox" id="show-sidebar"/>
+						<div class="settings__form-checkbox-display">
+							<img src="../img/ico-check-white.svg" />
+						</div>
+					</div>
+					Show ContactOut on page
+					<span title="You will still be able to access contact information via the toolbar">
+						<img src="../img/ico-information.svg"  class="settings__form-icon" />
+					</span>
+				</label>
+			</div>
+		</div>
+	</div>
+
+    <script src="../../app/options.js"></script>
+  </body>
+</html>

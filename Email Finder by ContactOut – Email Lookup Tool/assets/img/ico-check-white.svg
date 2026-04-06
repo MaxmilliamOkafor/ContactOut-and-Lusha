@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="14px" height="10px" viewBox="0 0 14 10" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>Path 6</title>
+    <g id="Page-1" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="Lists" transform="translate(-136.000000, -436.000000)" fill="#FFFFFF" fill-rule="nonzero">
+            <g id="#3-on-hover" transform="translate(120.000000, 418.000000)">
+                <g id="#3" transform="translate(0.000000, 0.500000)">
+                    <g id="checkbox-checked" transform="translate(13.000000, 12.500000)">
+                        <path d="M14.3448502,5.34401307 C14.7071501,4.92717111 15.3387694,4.88295603 15.7556114,5.24525593 C16.1403886,5.57968661 16.2076612,6.14359653 15.9307754,6.55623051 L15.8543685,6.65601709 L9.2117904,14.2985952 C8.8586206,14.7049326 8.25434241,14.7541995 7.84157694,14.4309226 L7.74992447,14.3497 L3.29289322,9.89266873 C2.90236893,9.50214444 2.90236893,8.86897946 3.29289322,8.47845517 C3.65337718,8.11797121 4.22060824,8.09024168 4.61289944,8.39526657 L4.70710678,8.47845517 L8.405,12.1760151 L14.3448502,5.34401307 Z" id="Path-6"></path>
+                    </g>
+                </g>
+            </g>
+        </g>
+    </g>
+</svg>

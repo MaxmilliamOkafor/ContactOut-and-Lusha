@@ -1,0 +1,124 @@
+{
+"update_url": "https://clients2.google.com/service/update2/crx",
+
+  "manifest_version": 3,
+  "name": "Email Finder by ContactOut – Email Lookup Tool",
+  "short_name": "Contact Out",
+  "description": "Find emails for 75% of Linkedin or ANY website. Save profiles to CRM. Chatgpt comments & email writer. Trusted by 76% of Fortune500.",
+  "version": "5.16.8",
+  "options_page": "assets/pages/options.html",
+  "action": {
+    "default_icon": "assets/icons/icon.png",
+    "default_title": "Browse to any Linkedin profile and click to use",
+    "default_popup": "assets/pages/app.html"
+  },
+  "icons": {
+    "16": "assets/icons/icon16.png",
+    "32": "assets/icons/icon32.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.linkedin.com/in/*",
+        "*://*.linkedin.com/sales*",
+        "*://*.linkedin.com/talent*"
+      ],
+      "js": ["/app/interceptor.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["*://*.linkedin.com/*", "https://github.com/*"],
+      "exclude_matches": [
+        "https://github.com/",
+        "https://github.com/pulls",
+        "https://github.com/issues",
+        "https://github.com/explore",
+        "https://github.com/marketplace",
+        "https://github.com/*/*"
+      ],
+      "js": ["/app/content_script.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://contactout.com/login/callback*",
+        "*://contactout.com/thanks"
+      ],
+      "js": ["/app/auth_callback.js"],
+      "run_at": "document_end"
+    },
+    {
+      "matches": [
+        "*://*.linkedin.com/company/*",
+        "*://*.linkedin.com/sales/company/*",
+        "*://*.linkedin.com/recruiter/company/*"
+      ],
+      "js": ["/app/linkedin_company.js"],
+      "run_at": "document_end"
+    },
+    {
+      "matches": ["*://contactout.com/*"],
+      "js": ["/app/contactout.js"],
+      "run_at": "document_end"
+    },
+    {
+      "matches": ["*://*.linkedin.com/checkpoint/*"],
+      "js": ["/app/linkedin_detect.js"],
+      "run_at": "document_end"
+    },
+    {
+      "matches": ["*://*.linkedin.com/*"],
+      "js": ["/app/linkedin_id_detect.js"],
+      "run_at": "document_end"
+    },
+    {
+      "matches": [
+        "*://*.linkedin.com/home",
+        "*://*.linkedin.com/authwall",
+        "*://*.linkedin.com/uas/login",
+        "*://*.linkedin.com/uas/login-cap",
+        "*://*.linkedin.com/login",
+        "*://*.linkedin.com/checkpoint/*/login-challenge-submit",
+        "*://*.linkedin.com/checkpoint/*/login",
+        "*://*.linkedin.com/checkpoint/*/login-submit",
+        "*://*.linkedin.com/uas/login-submit",
+        "*://*.linkedin.com/checkpoint/*/sign-in-another-account"
+      ],
+      "js": ["/app/linkedin_logout.js"],
+      "run_at": "document_end",
+      "all_frames": true
+    }
+  ],
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "background",
+    "cookies",
+    "storage",
+    "alarms",
+    "system.display"
+  ],
+  "host_permissions": [
+    "https://contactout.com/",
+    "https://*.linkedin.com/",
+    "https://github.com/"
+  ],
+  "optional_permissions": ["tabs"],
+  "optional_host_permissions": [
+    "https://*.lightning.force.com/*",
+    "https://*.salesforce.com/*",
+    "*://*/*"
+  ],
+  "background": {
+    "service_worker": "/app/background.js",
+    "type": "module"
+  },
+  "content_security_policy": {
+    "sandbox": "sandbox allow-scripts; script-src 'self'; object-src 'self'"
+  },
+  "externally_connectable": {
+    "matches": ["*://contactout.com/*"]
+  }
+}
