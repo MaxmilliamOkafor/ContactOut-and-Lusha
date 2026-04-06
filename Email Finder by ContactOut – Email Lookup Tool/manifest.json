@@ -75,6 +75,18 @@
     },
     {
       "matches": [
+        "*://*.linkedin.com/in/*",
+        "*://*.linkedin.com/jobs/*",
+        "*://*.linkedin.com/search/*",
+        "*://*.linkedin.com/sales/*",
+        "*://*.linkedin.com/talent/*",
+        "*://*.linkedin.com/recruiter/*"
+      ],
+      "js": ["/app/recruiter_outreach.js"],
+      "run_at": "document_end"
+    },
+    {
+      "matches": [
         "*://*.linkedin.com/home",
         "*://*.linkedin.com/authwall",
         "*://*.linkedin.com/uas/login",
