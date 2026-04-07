@@ -106,7 +106,19 @@
           text.includes('Run out of credits') ||
           text.includes('credits remaining') ||
           text.includes('daily limit reached') ||
-          text.includes('monthly limit reached')) {
+          text.includes('monthly limit reached') ||
+          text.includes('Phone number for this profile is not available') ||
+          text.includes('not available') && text.includes('Try another') ||
+          text.includes('No contact details available') ||
+          text.includes('Please try another profile') ||
+          text.includes('Email not available') ||
+          text.includes('email is not available') ||
+          text.includes('phone is not available') ||
+          text.includes('not found for this profile') ||
+          text.includes('Contact info unavailable') ||
+          text.includes('Upgrade to reveal') ||
+          text.includes('Subscribe to view') ||
+          text.includes('premium feature')) {
         // Hide the whole banner/container
         let container = el;
         for (let i = 0; i < 5; i++) {

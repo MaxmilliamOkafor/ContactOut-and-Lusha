@@ -45,7 +45,22 @@
           node.textContent.includes('out of credits') ||
           node.textContent.includes('credits left') ||
           node.textContent.includes('daily limit') ||
-          node.textContent.includes('limit reached')) {
+          node.textContent.includes('limit reached') ||
+          node.textContent.includes('Phone number for this profile is not available') ||
+          node.textContent.includes('not available') && node.textContent.includes('Try another') ||
+          node.textContent.includes('No contact details available') ||
+          node.textContent.includes('Please try another profile') ||
+          node.textContent.includes('Email not available') ||
+          node.textContent.includes('email is not available') ||
+          node.textContent.includes('phone is not available') ||
+          node.textContent.includes('not found for this profile') ||
+          node.textContent.includes('no results found') ||
+          node.textContent.includes('Contact info unavailable') ||
+          node.textContent.includes('data is not available') ||
+          node.textContent.includes('Upgrade to reveal') ||
+          node.textContent.includes('upgrade to see') ||
+          node.textContent.includes('Subscribe to view') ||
+          node.textContent.includes('premium feature')) {
         let container = node.parentElement;
         for (let i = 0; i < 8; i++) {
           if (container && container.parentElement &&
