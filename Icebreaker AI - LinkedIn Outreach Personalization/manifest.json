@@ -1,0 +1,82 @@
+{
+"update_url": "https://clients2.google.com/service/update2/crx",
+
+  "name": "Icebreaker AI - LinkedIn Outreach Personalization",
+  "description": "Match your offering to each prospect's interests with AI. 3x positive replies on LinkedIn with the most reasonable outreach.",
+  "version": "1.1.17",
+  "manifest_version": 3,
+  "icons": {
+    "16": "img/logo-16.png",
+    "32": "img/logo-32.png",
+    "48": "img/logo-48.png",
+    "128": "img/logo-128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "img/logo-48.png"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "background": {
+    "service_worker": "service-worker-loader.js",
+    "type": "module"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self';",
+    "sandbox": "sandbox allow-scripts; script-src 'self'; object-src 'self'"
+  },
+  "content_scripts": [
+    {
+      "js": [
+        "assets/index.ts-loader-l1pJxYA4.js"
+      ],
+      "matches": [
+        "https://*.linkedin.com/*"
+      ]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "matches": [],
+      "resources": [
+        "img/logo-16.png",
+        "img/logo-32.png",
+        "img/logo-48.png",
+        "img/logo-128.png"
+      ],
+      "use_dynamic_url": false
+    },
+    {
+      "matches": [
+        "https://*.linkedin.com/*"
+      ],
+      "resources": [
+        "assets/chunk-C-_oBWA7.js"
+      ],
+      "use_dynamic_url": false
+    }
+  ],
+  "oauth2": {
+    "client_id": "805996357610-q15ro11bmahtvbe6os78t966fj2us5qv.apps.googleusercontent.com",
+    "scopes": [
+      "openid",
+      "email",
+      "profile"
+    ]
+  },
+  "permissions": [
+    "alarms",
+    "activeTab",
+    "contextMenus",
+    "identity",
+    "sidePanel",
+    "storage",
+    "cookies"
+  ],
+  "host_permissions": [
+    "https://labs-api.drafter.cloud/*",
+    "https://*.linkedin.com/*",
+    "https://*.ingest.us.sentry.io/*"
+  ]
+}
