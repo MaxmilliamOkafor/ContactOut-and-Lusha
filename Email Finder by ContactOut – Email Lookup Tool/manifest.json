@@ -5,7 +5,7 @@
   "name": "Email Finder by ContactOut – Email Lookup Tool",
   "short_name": "Contact Out",
   "description": "Find emails for 75% of Linkedin or ANY website. Save profiles to CRM. Chatgpt comments & email writer. Trusted by 76% of Fortune500. Now with Calendar, HubSpot, and Scout mode.",
-  "version": "5.17.0",
+  "version": "5.18.0",
   "options_page": "assets/pages/options.html",
   "action": {
     "default_icon": "assets/icons/icon.png",
@@ -38,7 +38,7 @@
         "https://github.com/marketplace",
         "https://github.com/*/*"
       ],
-      "js": ["/app/content_script.js"],
+      "js": ["/app/content_script.js", "/app/sidebar_patcher.js"],
       "run_at": "document_start"
     },
     {
@@ -60,8 +60,9 @@
     },
     {
       "matches": ["*://contactout.com/*"],
-      "js": ["/app/contactout.js"],
-      "run_at": "document_end"
+      "js": ["/app/contactout.js", "/app/contactout_iframe_patcher.js"],
+      "run_at": "document_end",
+      "all_frames": true
     },
     {
       "matches": ["*://*.linkedin.com/checkpoint/*"],
