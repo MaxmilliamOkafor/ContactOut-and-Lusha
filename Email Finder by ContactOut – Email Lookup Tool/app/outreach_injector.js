@@ -90,9 +90,10 @@
       }
 
       .${PANEL_CLASS} {
-        position: absolute;
-        top: calc(100% + 12px);
-        right: 0;
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
         width: 420px;
         max-height: 580px;
         overflow-y: auto;
@@ -105,9 +106,32 @@
         animation: outreach-panel-in 0.3s cubic-bezier(0.34,1.56,0.64,1);
         color: #1a1a2e;
       }
+      /* Dark mode panel */
+      .theme--dark .${PANEL_CLASS},
+      html[data-color-theme="dark"] .${PANEL_CLASS} {
+        background: #1e1e2e;
+        border-color: rgba(255,255,255,0.08);
+        color: #e0e0e8;
+      }
+      .theme--dark .op-textarea, html[data-color-theme="dark"] .op-textarea {
+        background: #2a2a3e; border-color: rgba(255,255,255,0.12); color: #e0e0e8;
+      }
+      .theme--dark .op-tabs, html[data-color-theme="dark"] .op-tabs { background: #16161e; }
+      .theme--dark .op-tab, html[data-color-theme="dark"] .op-tab { color: #888; }
+      .theme--dark .op-tones, html[data-color-theme="dark"] .op-tones { border-color: rgba(255,255,255,0.06); }
+      .theme--dark .op-tone, html[data-color-theme="dark"] .op-tone { background: #2a2a3e; border-color: rgba(255,255,255,0.1); color: #aaa; }
+      .theme--dark .op-sec-btn, html[data-color-theme="dark"] .op-sec-btn { background: #2a2a3e; border-color: rgba(255,255,255,0.1); color: #ccc; }
+      .theme--dark .op-footer, html[data-color-theme="dark"] .op-footer { background: #16161e; border-color: rgba(255,255,255,0.06); }
+      .theme--dark .op-cv-prompt, html[data-color-theme="dark"] .op-cv-prompt { background: rgba(249,115,22,0.06); border-color: rgba(255,255,255,0.06); }
+      .op-overlay {
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.4); z-index: 2147483640;
+        animation: op-fade-in 0.2s ease;
+      }
+      @keyframes op-fade-in { from { opacity: 0; } to { opacity: 1; } }
       @keyframes outreach-panel-in {
-        from { opacity: 0; transform: translateY(-12px) scale(0.96); }
-        to { opacity: 1; transform: translateY(0) scale(1); }
+        from { opacity: 0; transform: translate(-50%, -50%) translateY(-12px) scale(0.96); }
+        to { opacity: 1; transform: translate(-50%, -50%) translateY(0) scale(1); }
       }
 
       .op-header {
@@ -255,67 +279,99 @@
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // 3. Find the Action Bar (robust multi-strategy)
+  // 3. Find the Action Bar (scoped to main profile card ONLY)
   // ═══════════════════════════════════════════════════════════════
+
+  // Helper: check element is in the main content, NOT in sidebar/aside
+  function isInMainContent(el) {
+    let node = el;
+    while (node) {
+      const tag = node.tagName ? node.tagName.toLowerCase() : '';
+      // Reject if inside aside, sidebar, or "people you may know" sections
+      if (tag === 'aside') return false;
+      if (node.classList && (
+        node.classList.contains('scaffold-layout__aside') ||
+        node.classList.contains('scaffold-layout__sidebar') ||
+        node.classList.contains('artdeco-card') && node.closest('aside')
+      )) return false;
+      // Accept if we've reached the main content area
+      if (node.classList && (
+        node.classList.contains('scaffold-layout__main') ||
+        node.classList.contains('scaffold-layout__content')
+      )) return true;
+      if (tag === 'main') return true;
+      node = node.parentElement;
+    }
+    return true; // default allow if no sidebar found
+  }
+
   function findActionBar() {
+    // Get the main content area to scope searches
+    const mainContent = document.querySelector('.scaffold-layout__main, main, .scaffold-layout__content') || document.body;
+
     // Strategy 1: Direct selectors for known LinkedIn action bar containers
     const directSelectors = [
       '.pvs-profile-actions',
       '.pv-top-card-v2-ctas',
       '.pv-top-card-v3__action-bar',
       '.pv-s-profile-actions',
-      '.scaffold-layout__main .ph5 .mt2 .display-flex',
     ];
     for (const sel of directSelectors) {
-      const el = document.querySelector(sel);
-      if (el) { console.log('[OutreachPro] Found action bar via:', sel); return el; }
+      const el = mainContent.querySelector(sel);
+      if (el && isInMainContent(el)) {
+        console.log('[OutreachPro] Found action bar via:', sel);
+        return el;
+      }
     }
 
-    // Strategy 2: Find a Message/Connect/Follow button and get its parent
+    // Strategy 2: Find Message/Connect buttons ONLY in main content
+    // Use querySelectorAll and check each to ensure it's in the main profile card
     const btnSelectors = [
       'button[aria-label*="Message"]',
       'button[aria-label*="message"]',
-      'a[href*="messaging"][class*="message"]',
       'button[aria-label*="Connect"]',
       'button[aria-label*="connect"]',
-      'button[aria-label*="Follow"]',
-      'button[aria-label*="follow"]',
-      'button[aria-label*="More actions"]',
       'button[aria-label*="Pending"]',
+      'button[aria-label*="More actions"]',
+      'button[aria-label*="Follow"]',
     ];
+
     for (const sel of btnSelectors) {
-      const btn = document.querySelector(sel);
-      if (btn) {
-        // Walk up to find the flex container parent
+      const buttons = mainContent.querySelectorAll(sel);
+      for (const btn of buttons) {
+        // CRITICAL: Skip buttons that are in the sidebar/aside
+        if (!isInMainContent(btn)) continue;
+
+        // Walk up to find the flex container parent (the action bar row)
         let parent = btn.parentElement;
         for (let i = 0; i < 5; i++) {
           if (!parent) break;
+          if (!isInMainContent(parent)) break;
           const style = getComputedStyle(parent);
-          if (style.display === 'flex' || style.display === 'inline-flex') {
+          // The action bar is a flex row containing multiple buttons
+          if ((style.display === 'flex' || style.display === 'inline-flex') && parent.querySelectorAll('button, a').length >= 2) {
             console.log('[OutreachPro] Found action bar via button parent:', sel);
             return parent;
           }
           parent = parent.parentElement;
         }
-        // Fallback: just use direct parent
-        console.log('[OutreachPro] Found action bar via button direct parent:', sel);
-        return btn.parentElement;
       }
     }
 
-    // Strategy 3: Look for all buttons in the top card area
-    const topCard = document.querySelector('.pv-top-card, .scaffold-layout__main .ph5, .artdeco-card');
-    if (topCard) {
+    // Strategy 3: Text-based search scoped to the first artdeco-card in main content
+    const topCard = mainContent.querySelector('.artdeco-card, .pv-top-card');
+    if (topCard && isInMainContent(topCard)) {
       const buttons = topCard.querySelectorAll('button');
       for (const btn of buttons) {
         const text = btn.textContent.trim().toLowerCase();
-        if (text === 'message' || text === 'connect' || text === 'follow' || text === 'more') {
+        if (text === 'message' || text === 'connect' || text === 'follow' || text === 'more' || text.includes('pending')) {
           let parent = btn.parentElement;
-          for (let i = 0; i < 3; i++) {
+          for (let i = 0; i < 4; i++) {
             if (!parent) break;
-            const children = parent.children.length;
-            if (children >= 2 && children <= 8) {
-              console.log('[OutreachPro] Found action bar via text search');
+            const childBtns = parent.querySelectorAll('button');
+            // The action bar row should have 2-6 buttons (Connect, Message, More, etc.)
+            if (childBtns.length >= 2 && childBtns.length <= 8) {
+              console.log('[OutreachPro] Found action bar via text search in top card');
               return parent;
             }
             parent = parent.parentElement;
@@ -369,9 +425,23 @@
   // 5. Panel Toggle & Build
   // ═══════════════════════════════════════════════════════════════
   function togglePanel(wrapper) {
-    if (currentPanel) { currentPanel.remove(); currentPanel = null; return; }
+    if (currentPanel) {
+      // Close existing
+      const overlay = document.querySelector('.op-overlay');
+      if (overlay) overlay.remove();
+      currentPanel.remove();
+      currentPanel = null;
+      return;
+    }
 
     const profile = scrapeProfile();
+
+    // Create backdrop overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'op-overlay';
+    document.body.appendChild(overlay);
+
+    // Create panel (fixed centered)
     const panel = document.createElement('div');
     panel.className = PANEL_CLASS;
     const name = profile.name || 'LinkedIn User';
@@ -414,20 +484,21 @@
       <div class="op-footer">Powered by <span class="op-hl">OutreachPro</span> — <span class="op-hl">∞ Unlimited</span> messages</div>
     `;
 
-    wrapper.appendChild(panel);
+    document.body.appendChild(panel);
     currentPanel = panel;
 
-    // Close handlers
-    panel.querySelector('#op-close').onclick = () => { panel.remove(); currentPanel = null; };
-    setTimeout(() => {
-      const handler = (e) => {
-        if (currentPanel && !panel.contains(e.target) && !wrapper.querySelector('.' + BUTTON_CLASS).contains(e.target)) {
-          panel.remove(); currentPanel = null;
-          document.removeEventListener('click', handler, true);
-        }
-      };
-      document.addEventListener('click', handler, true);
-    }, 150);
+    // Close on overlay click
+    overlay.onclick = () => {
+      overlay.remove();
+      panel.remove();
+      currentPanel = null;
+    };
+    // Close button
+    panel.querySelector('#op-close').onclick = () => {
+      overlay.remove();
+      panel.remove();
+      currentPanel = null;
+    };
 
     setupPanelHandlers(panel, profile);
   }
@@ -666,6 +737,8 @@
         lastUrl = location.href;
         document.querySelectorAll('.' + WRAPPER_CLASS).forEach(w => w.remove());
         if (currentPanel) { currentPanel.remove(); currentPanel = null; }
+        const overlay = document.querySelector('.op-overlay');
+        if (overlay) overlay.remove();
         setTimeout(injectButton, 2000);
         setTimeout(injectButton, 4000);
       }
