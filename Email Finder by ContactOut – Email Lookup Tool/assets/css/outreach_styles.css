@@ -1,0 +1,540 @@
+/* ═══════════════════════════════════════════════════════════════
+   OutreachPro — Content Script Styles
+   Premium floating button + outreach panel on LinkedIn profiles
+   ═══════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+/* ── Floating Outreach Button (inline with LinkedIn action bar) ── */
+.outreach-pro-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px;
+  height: 32px;
+  background: linear-gradient(135deg, #F59E0B 0%, #F97316 50%, #EF4444 100%);
+  border: none;
+  border-radius: 16px;
+  color: #fff;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 12px rgba(249, 115, 22, 0.35);
+  position: relative;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+  z-index: 100;
+  margin-left: 8px;
+  vertical-align: middle;
+  animation: outreach-btn-glow 3s ease-in-out infinite;
+}
+
+.outreach-pro-btn:hover {
+  transform: translateY(-1px) scale(1.03);
+  box-shadow: 0 6px 24px rgba(249, 115, 22, 0.5);
+}
+
+.outreach-pro-btn:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.outreach-pro-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
+.outreach-pro-btn .ai-sparkle {
+  display: inline-flex;
+  font-size: 14px;
+  animation: outreach-sparkle 2s ease-in-out infinite;
+}
+
+@keyframes outreach-btn-glow {
+  0%, 100% { box-shadow: 0 2px 12px rgba(249, 115, 22, 0.35); }
+  50% { box-shadow: 0 4px 20px rgba(249, 115, 22, 0.55); }
+}
+
+@keyframes outreach-sparkle {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  25% { transform: scale(1.2) rotate(5deg); }
+  75% { transform: scale(0.95) rotate(-3deg); }
+}
+
+/* ── AI Powered Badge ── */
+.outreach-pro-badge {
+  position: absolute;
+  top: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(249, 115, 22, 0.12);
+  color: #F97316;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 8px;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  font-family: 'Inter', sans-serif;
+  pointer-events: none;
+  text-transform: uppercase;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* ── Outreach Panel (Floating Dropdown) ── */
+.outreach-pro-panel {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  width: 440px;
+  max-height: 600px;
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 16px;
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.12),
+    0 8px 32px rgba(0, 0, 0, 0.08),
+    0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+  z-index: 2147483641;
+  overflow: hidden;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  animation: outreach-panel-enter 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  color: #1a1a2e;
+}
+
+@keyframes outreach-panel-enter {
+  from { opacity: 0; transform: translateY(-12px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── Panel Header ── */
+.outreach-pro-panel-header {
+  padding: 16px 20px;
+  background: linear-gradient(135deg, #F59E0B 0%, #F97316 50%, #EF4444 100%);
+  color: white;
+  position: relative;
+  overflow: hidden;
+}
+
+.outreach-pro-panel-header::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 60%);
+  animation: outreach-header-shimmer 4s ease-in-out infinite;
+}
+
+@keyframes outreach-header-shimmer {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(30%, 20%); }
+}
+
+.outreach-pro-panel-header .prospect-name {
+  font-size: 15px;
+  font-weight: 700;
+  position: relative;
+  z-index: 1;
+}
+
+.outreach-pro-panel-header .prospect-headline {
+  font-size: 12px;
+  opacity: 0.9;
+  margin-top: 2px;
+  position: relative;
+  z-index: 1;
+}
+
+.outreach-pro-panel-header .unlimited-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.2);
+  padding: 3px 10px;
+  border-radius: 10px;
+  margin-top: 8px;
+  position: relative;
+  z-index: 1;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.outreach-pro-panel-header .close-btn {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+  z-index: 2;
+}
+
+.outreach-pro-panel-header .close-btn:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+/* ── Tab Navigation ── */
+.outreach-pro-tabs {
+  display: flex;
+  border-bottom: 1px solid #f0f0f5;
+  padding: 0 4px;
+  background: #fafafa;
+}
+
+.outreach-pro-tab {
+  flex: 1;
+  padding: 10px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  color: #888;
+  border-bottom: 2px solid transparent;
+  transition: all 0.25s ease;
+  background: none;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.outreach-pro-tab:hover {
+  color: #F97316;
+  background: rgba(249, 115, 22, 0.04);
+}
+
+.outreach-pro-tab.active {
+  color: #F97316;
+  border-bottom-color: #F97316;
+  background: rgba(249, 115, 22, 0.06);
+}
+
+.outreach-pro-tab .tab-icon {
+  display: block;
+  font-size: 16px;
+  margin-bottom: 2px;
+}
+
+/* ── Tone Selector ── */
+.outreach-pro-tone-bar {
+  display: flex;
+  gap: 6px;
+  padding: 10px 16px;
+  background: #fafafa;
+  border-bottom: 1px solid #f0f0f5;
+}
+
+.outreach-pro-tone-btn {
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid #e0e0e5;
+  border-radius: 20px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+  color: #666;
+}
+
+.outreach-pro-tone-btn:hover {
+  border-color: #F97316;
+  color: #F97316;
+}
+
+.outreach-pro-tone-btn.active {
+  background: linear-gradient(135deg, #F59E0B, #F97316);
+  color: white;
+  border-color: transparent;
+  box-shadow: 0 2px 8px rgba(249, 115, 22, 0.3);
+}
+
+/* ── Message Area ── */
+.outreach-pro-message-area {
+  padding: 16px;
+}
+
+.outreach-pro-textarea {
+  width: 100%;
+  min-height: 140px;
+  border: 1.5px solid #e8e8ed;
+  border-radius: 12px;
+  padding: 14px;
+  font-size: 13px;
+  font-family: 'Inter', -apple-system, sans-serif;
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.3s, box-shadow 0.3s;
+  color: #1a1a2e;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.outreach-pro-textarea:focus {
+  border-color: #F97316;
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.12);
+}
+
+.outreach-pro-textarea::placeholder {
+  color: #bbb;
+}
+
+.outreach-pro-char-count {
+  font-size: 11px;
+  color: #999;
+  text-align: right;
+  margin-top: 6px;
+  font-family: 'Inter', sans-serif;
+}
+
+.outreach-pro-char-count.warning {
+  color: #EF4444;
+  font-weight: 600;
+}
+
+/* ── Action Buttons ── */
+.outreach-pro-actions {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 16px;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.outreach-pro-generate-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  background: linear-gradient(135deg, #F59E0B 0%, #F97316 50%, #EF4444 100%);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.25s;
+  font-family: inherit;
+  box-shadow: 0 2px 10px rgba(249, 115, 22, 0.3);
+}
+
+.outreach-pro-generate-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 18px rgba(249, 115, 22, 0.45);
+}
+
+.outreach-pro-generate-btn:active {
+  transform: translateY(0);
+}
+
+.outreach-pro-generate-btn.generating {
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.outreach-pro-secondary-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  background: white;
+  color: #666;
+  border: 1.5px solid #e0e0e5;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.outreach-pro-secondary-btn:hover {
+  border-color: #F97316;
+  color: #F97316;
+  background: rgba(249, 115, 22, 0.04);
+}
+
+.outreach-pro-secondary-btn.copied {
+  background: #10B981;
+  color: white;
+  border-color: #10B981;
+}
+
+/* ── Insert Button (for LinkedIn message box) ── */
+.outreach-pro-insert-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #0077B5;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.outreach-pro-insert-btn:hover {
+  background: #005e8f;
+}
+
+/* ── Loading Skeleton ── */
+.outreach-pro-skeleton {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: outreach-skeleton-shimmer 1.5s infinite;
+  border-radius: 6px;
+  height: 14px;
+  margin-bottom: 8px;
+}
+
+.outreach-pro-skeleton.line-short { width: 60%; }
+.outreach-pro-skeleton.line-medium { width: 80%; }
+.outreach-pro-skeleton.line-long { width: 95%; }
+
+@keyframes outreach-skeleton-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ── CV Upload Prompt ── */
+.outreach-pro-cv-prompt {
+  padding: 12px 16px;
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.06), rgba(239, 68, 68, 0.04));
+  border-top: 1px solid #f0f0f5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: #888;
+}
+
+.outreach-pro-cv-prompt a {
+  color: #F97316;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.outreach-pro-cv-prompt a:hover {
+  text-decoration: underline;
+}
+
+/* ── Footer ── */
+.outreach-pro-footer {
+  padding: 10px 16px;
+  background: #fafafa;
+  border-top: 1px solid #f0f0f5;
+  text-align: center;
+  font-size: 10px;
+  color: #bbb;
+  font-family: 'Inter', sans-serif;
+  letter-spacing: 0.03em;
+}
+
+.outreach-pro-footer .unlimited-text {
+  color: #F97316;
+  font-weight: 700;
+}
+
+/* ── Button wrapper for positioning ── */
+.outreach-pro-wrapper {
+  display: inline-flex;
+  position: relative;
+  vertical-align: middle;
+  z-index: 100;
+}
+
+/* ── Responsive adjustments ── */
+@media (max-width: 800px) {
+  .outreach-pro-panel {
+    width: 360px;
+    right: -40px;
+  }
+}
+
+/* ── Dark Mode Support (LinkedIn dark theme) ── */
+.theme--dark .outreach-pro-panel,
+[data-color-theme="dark"] .outreach-pro-panel,
+body.theme--dark .outreach-pro-panel {
+  background: rgba(30, 30, 40, 0.97);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: #e0e0e0;
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+}
+
+.theme--dark .outreach-pro-tabs,
+[data-color-theme="dark"] .outreach-pro-tabs {
+  background: rgba(25, 25, 35, 0.95);
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+.theme--dark .outreach-pro-tab,
+[data-color-theme="dark"] .outreach-pro-tab {
+  color: #888;
+}
+
+.theme--dark .outreach-pro-tone-bar,
+[data-color-theme="dark"] .outreach-pro-tone-bar {
+  background: rgba(25, 25, 35, 0.95);
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+.theme--dark .outreach-pro-tone-btn,
+[data-color-theme="dark"] .outreach-pro-tone-btn {
+  background: rgba(40, 40, 55, 0.9);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #aaa;
+}
+
+.theme--dark .outreach-pro-textarea,
+[data-color-theme="dark"] .outreach-pro-textarea {
+  background: rgba(20, 20, 30, 0.7);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #e0e0e0;
+}
+
+.theme--dark .outreach-pro-secondary-btn,
+[data-color-theme="dark"] .outreach-pro-secondary-btn {
+  background: rgba(40, 40, 55, 0.9);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #ccc;
+}
+
+.theme--dark .outreach-pro-footer,
+[data-color-theme="dark"] .outreach-pro-footer {
+  background: rgba(20, 20, 30, 0.8);
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+.theme--dark .outreach-pro-cv-prompt,
+[data-color-theme="dark"] .outreach-pro-cv-prompt {
+  background: rgba(249, 115, 22, 0.05);
+  border-top-color: rgba(255, 255, 255, 0.06);
+}

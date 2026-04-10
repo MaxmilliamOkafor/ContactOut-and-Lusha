@@ -2,9 +2,9 @@
 "update_url": "https://clients2.google.com/service/update2/crx",
 
   "manifest_version": 3,
-  "name": "Email Finder by ContactOut – Email Lookup Tool",
-  "short_name": "Contact Out",
-  "description": "Find emails for 75% of Linkedin or ANY website. Save profiles to CRM. Chatgpt comments & email writer. Trusted by 76% of Fortune500. Now with Calendar, HubSpot, and Scout mode.",
+  "name": "Email Finder by ContactOut – Email Lookup Tool + OutreachPro",
+  "short_name": "ContactOut + OutreachPro",
+  "description": "Find emails for 75% of Linkedin or ANY website. Save profiles to CRM. AI-powered outreach: one-click personalized messages for connection requests, DMs, and emails. Upload your CV for better personalization. Unlimited — no tokens, no coins.",
   "version": "5.18.0",
   "options_page": "assets/pages/options.html",
   "action": {
@@ -88,6 +88,19 @@
     },
     {
       "matches": [
+        "*://*.linkedin.com/in/*",
+        "*://*.linkedin.com/search/*",
+        "*://*.linkedin.com/sales/*",
+        "*://*.linkedin.com/talent/*",
+        "*://*.linkedin.com/recruiter/*",
+        "*://*.linkedin.com/mynetwork/*"
+      ],
+      "js": ["/app/message_generator.js", "/app/cv_manager.js", "/app/outreach_injector.js"],
+      "css": [],
+      "run_at": "document_end"
+    },
+    {
+      "matches": [
         "*://*.linkedin.com/home",
         "*://*.linkedin.com/authwall",
         "*://*.linkedin.com/uas/login",
@@ -163,9 +176,19 @@
     "*://*/*"
   ],
   "background": {
-    "service_worker": "/app/background.js",
+    "service_worker": "/app/background_wrapper.js",
     "type": "module"
   },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "assets/css/outreach_styles.css",
+        "assets/css/outreach_popup.css",
+        "assets/pages/outreach_popup.html"
+      ],
+      "matches": ["*://*.linkedin.com/*"]
+    }
+  ],
   "content_security_policy": {
     "sandbox": "sandbox allow-scripts; script-src 'self'; object-src 'self'"
   },

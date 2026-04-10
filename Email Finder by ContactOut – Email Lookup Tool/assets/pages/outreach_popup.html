@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OutreachPro — LinkedIn AI Outreach</title>
+  <link rel="stylesheet" href="../css/outreach_popup.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="popup-header">
+      <div class="header-brand">
+        <span class="brand-icon">✨</span>
+        <div>
+          <h1 class="brand-title">OutreachPro</h1>
+          <p class="brand-subtitle">AI-Powered LinkedIn Outreach</p>
+        </div>
+      </div>
+      <div class="unlimited-pill">∞ Unlimited</div>
+    </header>
+
+    <!-- Tab Navigation -->
+    <nav class="popup-tabs">
+      <button class="popup-tab active" data-tab="profile">
+        <span>👤</span> Your Profile
+      </button>
+      <button class="popup-tab" data-tab="templates">
+        <span>📝</span> Templates
+      </button>
+      <button class="popup-tab" data-tab="settings">
+        <span>⚙️</span> Settings
+      </button>
+    </nav>
+
+    <!-- Profile Tab -->
+    <div class="tab-content active" id="tab-profile">
+      <div class="section-card">
+        <h2 class="section-title">📄 Your Resume / CV</h2>
+        <p class="section-desc">Upload your background so generated messages match your experience, skills, and personality.</p>
+        
+        <div class="form-group">
+          <label>Full Name</label>
+          <input type="text" id="user-name" placeholder="John Smith" />
+        </div>
+
+        <div class="form-group">
+          <label>Professional Summary</label>
+          <textarea id="user-summary" placeholder="Brief summary of your professional background, goals, and strengths..." rows="3"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label>Key Skills <span class="hint">(comma-separated)</span></label>
+          <input type="text" id="user-skills" placeholder="Python, Product Management, Data Science, Leadership..." />
+        </div>
+
+        <div class="form-group">
+          <label>Experience Highlights</label>
+          <textarea id="user-experience" placeholder="Key roles, companies, achievements..." rows="3"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label>Education</label>
+          <input type="text" id="user-education" placeholder="Degree, University, Year" />
+        </div>
+
+        <div class="form-divider"></div>
+
+        <h3 class="section-subtitle">📎 Or paste your full resume text</h3>
+        <div class="form-group">
+          <textarea id="user-raw-text" placeholder="Paste your entire resume text here and we'll extract the key sections automatically..." rows="5"></textarea>
+          <button class="btn-secondary" id="parse-resume-btn">🔍 Auto-Extract Sections</button>
+        </div>
+
+        <div class="form-divider"></div>
+
+        <h3 class="section-subtitle">🌐 Website / Portfolio</h3>
+        <div class="form-group">
+          <input type="url" id="user-website" placeholder="https://yourportfolio.com" />
+        </div>
+
+        <button class="btn-primary" id="save-profile-btn">
+          💾 Save Profile
+        </button>
+        <div id="save-status" class="save-status"></div>
+      </div>
+    </div>
+
+    <!-- Templates Tab -->
+    <div class="tab-content" id="tab-templates">
+      <div class="section-card">
+        <h2 class="section-title">📝 Message Templates</h2>
+        <p class="section-desc">Create custom templates for different outreach scenarios. Use placeholders like <code>{name}</code>, <code>{company}</code>, <code>{headline}</code>.</p>
+
+        <div id="templates-list">
+          <!-- Populated by JS -->
+        </div>
+
+        <button class="btn-secondary" id="add-template-btn" style="margin-top: 12px;">
+          ➕ Add New Template
+        </button>
+      </div>
+
+      <div class="section-card" style="margin-top: 12px;">
+        <h3 class="section-subtitle">📖 Available Placeholders</h3>
+        <div class="placeholder-grid">
+          <code>{name}</code>
+          <code>{firstName}</code>
+          <code>{company}</code>
+          <code>{headline}</code>
+          <code>{location}</code>
+          <code>{about}</code>
+          <code>{myName}</code>
+          <code>{mySkills}</code>
+          <code>{mySummary}</code>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Tab -->
+    <div class="tab-content" id="tab-settings">
+      <div class="section-card">
+        <h2 class="section-title">⚙️ Preferences</h2>
+
+        <div class="form-group">
+          <label>Default Tone</label>
+          <select id="setting-tone">
+            <option value="professional">Professional</option>
+            <option value="casual">Casual</option>
+            <option value="enthusiastic">Enthusiastic</option>
+            <option value="witty">Witty</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Email Signature</label>
+          <textarea id="setting-signature" placeholder="Best regards,&#10;Your Name&#10;yourname@email.com" rows="3"></textarea>
+        </div>
+
+        <div class="form-group toggle-group">
+          <label>Show outreach button on profiles</label>
+          <label class="toggle">
+            <input type="checkbox" id="setting-show-btn" checked />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="form-group toggle-group">
+          <label>Auto-insert into LinkedIn message box</label>
+          <label class="toggle">
+            <input type="checkbox" id="setting-auto-insert" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <button class="btn-primary" id="save-settings-btn">
+          💾 Save Settings
+        </button>
+        <div id="settings-save-status" class="save-status"></div>
+      </div>
+
+      <div class="section-card" style="margin-top: 12px;">
+        <h2 class="section-title" style="font-size: 14px;">💡 About OutreachPro</h2>
+        <p class="section-desc" style="margin-bottom: 4px;">
+          AI-powered LinkedIn outreach — <strong style="color: #F97316;">completely unlimited</strong>. No tokens, no coins, no credits, no subscriptions.
+        </p>
+        <p class="section-desc" style="font-size: 10px; opacity: 0.5;">
+          All data stored locally in your browser. Privacy-first.
+        </p>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="popup-footer">
+      <span>OutreachPro</span> · <span style="color: #F97316;">∞ Unlimited</span> · Zero limits
+    </footer>
+  </div>
+
+  <script src="../../app/cv_manager.js"></script>
+  <script src="../../app/outreach_popup.js"></script>
+</body>
+</html>
