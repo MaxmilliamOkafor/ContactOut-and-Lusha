@@ -2,155 +2,354 @@
  * OutreachPro — LinkedIn Profile Outreach Injector
  *
  * Injects a prominent "Connect with AI message" button beside LinkedIn's
- * native action buttons (Message, Follow, More), plus a rich outreach panel
- * for one-click personalized message generation.
+ * native action buttons (Message, Follow, More).
  *
- * Inspired by Icebreaker AI's inline button + LinkedRadar's template system.
  * Zero limitations — no tokens, coins, or API limits.
  */
 (function () {
   'use strict';
 
-  const BUTTON_CLASS = 'outreach-pro-btn';
   const WRAPPER_CLASS = 'outreach-pro-wrapper';
+  const BUTTON_CLASS = 'outreach-pro-btn';
   const PANEL_CLASS = 'outreach-pro-panel';
-  const STYLES_INJECTED_FLAG = 'outreach-pro-styles-injected';
-
   let currentPanel = null;
   let observer = null;
+  let lastUrl = '';
 
   // ═══════════════════════════════════════════════════════════════
-  // SECTION 1: Inject CSS
+  // 1. Inject Styles (inline — no external CSS dependency)
   // ═══════════════════════════════════════════════════════════════
   function injectStyles() {
-    if (document.getElementById(STYLES_INJECTED_FLAG)) return;
-    const link = document.createElement('link');
-    link.id = STYLES_INJECTED_FLAG;
-    link.rel = 'stylesheet';
-    link.href = chrome.runtime.getURL('assets/css/outreach_styles.css');
-    document.head.appendChild(link);
+    if (document.getElementById('outreach-pro-injected-css')) return;
+    const style = document.createElement('style');
+    style.id = 'outreach-pro-injected-css';
+    style.textContent = `
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+      .${WRAPPER_CLASS} {
+        display: inline-flex;
+        position: relative;
+        vertical-align: middle;
+        z-index: 100;
+        align-items: center;
+        margin-left: 8px;
+      }
+
+      .${BUTTON_CLASS} {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 20px;
+        height: 32px;
+        background: linear-gradient(135deg, #F59E0B 0%, #F97316 50%, #EF4444 100%);
+        border: none;
+        border-radius: 16px;
+        color: #fff;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 2px 12px rgba(249, 115, 22, 0.35);
+        white-space: nowrap;
+        letter-spacing: 0.01em;
+        animation: outreach-glow 3s ease-in-out infinite;
+      }
+      .${BUTTON_CLASS}:hover {
+        transform: translateY(-1px) scale(1.03);
+        box-shadow: 0 6px 24px rgba(249, 115, 22, 0.5);
+      }
+      .${BUTTON_CLASS} .ai-spark { animation: outreach-spark 2s ease-in-out infinite; display: inline-flex; }
+
+      @keyframes outreach-glow {
+        0%, 100% { box-shadow: 0 2px 12px rgba(249,115,22,0.35); }
+        50% { box-shadow: 0 4px 20px rgba(249,115,22,0.55); }
+      }
+      @keyframes outreach-spark {
+        0%, 100% { transform: scale(1) rotate(0deg); }
+        25% { transform: scale(1.2) rotate(5deg); }
+        75% { transform: scale(0.95) rotate(-3deg); }
+      }
+
+      .outreach-pro-badge {
+        position: absolute;
+        top: -18px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(249,115,22,0.12);
+        color: #F97316;
+        font-size: 9px;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: 8px;
+        letter-spacing: 0.05em;
+        white-space: nowrap;
+        font-family: 'Inter', sans-serif;
+        pointer-events: none;
+        text-transform: uppercase;
+      }
+
+      .${PANEL_CLASS} {
+        position: absolute;
+        top: calc(100% + 12px);
+        right: 0;
+        width: 420px;
+        max-height: 580px;
+        overflow-y: auto;
+        background: #fff;
+        border: 1px solid rgba(0,0,0,0.08);
+        border-radius: 16px;
+        box-shadow: 0 24px 80px rgba(0,0,0,0.15), 0 8px 32px rgba(0,0,0,0.08);
+        z-index: 2147483641;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        animation: outreach-panel-in 0.3s cubic-bezier(0.34,1.56,0.64,1);
+        color: #1a1a2e;
+      }
+      @keyframes outreach-panel-in {
+        from { opacity: 0; transform: translateY(-12px) scale(0.96); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+      }
+
+      .op-header {
+        padding: 16px 20px;
+        background: linear-gradient(135deg, #F59E0B 0%, #F97316 50%, #EF4444 100%);
+        color: #fff;
+        border-radius: 16px 16px 0 0;
+        position: relative;
+      }
+      .op-header .op-name { font-size: 15px; font-weight: 700; }
+      .op-header .op-headline { font-size: 12px; opacity: 0.9; margin-top: 2px; }
+      .op-header .op-close {
+        position: absolute; top: 12px; right: 16px;
+        background: rgba(255,255,255,0.2); border: none; color: #fff;
+        width: 28px; height: 28px; border-radius: 50%; cursor: pointer;
+        font-size: 16px; display: flex; align-items: center; justify-content: center;
+      }
+      .op-header .op-close:hover { background: rgba(255,255,255,0.35); }
+      .op-header .op-unlimited {
+        display: inline-flex; align-items: center; gap: 4px;
+        font-size: 10px; font-weight: 700; background: rgba(255,255,255,0.2);
+        padding: 3px 10px; border-radius: 10px; margin-top: 8px; text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      .op-tabs {
+        display: flex; border-bottom: 1px solid #f0f0f5; background: #fafafa;
+      }
+      .op-tab {
+        flex: 1; padding: 10px 4px; font-size: 11px; font-weight: 600; text-align: center;
+        cursor: pointer; color: #888; border: none; border-bottom: 2px solid transparent;
+        background: none; font-family: inherit; transition: all 0.2s;
+      }
+      .op-tab:hover { color: #F97316; background: rgba(249,115,22,0.04); }
+      .op-tab.active { color: #F97316; border-bottom-color: #F97316; }
+
+      .op-tones {
+        display: flex; gap: 6px; padding: 10px 16px; border-bottom: 1px solid #f0f0f5;
+      }
+      .op-tone {
+        padding: 5px 12px; font-size: 11px; font-weight: 500;
+        border: 1px solid #e0e0e5; border-radius: 20px; background: #fff;
+        cursor: pointer; font-family: inherit; color: #666; transition: all 0.2s;
+      }
+      .op-tone:hover { border-color: #F97316; color: #F97316; }
+      .op-tone.active {
+        background: linear-gradient(135deg, #F59E0B, #F97316); color: #fff;
+        border-color: transparent; box-shadow: 0 2px 8px rgba(249,115,22,0.3);
+      }
+
+      .op-msg-area { padding: 16px; }
+      .op-textarea {
+        width: 100%; min-height: 130px; border: 1.5px solid #e8e8ed; border-radius: 12px;
+        padding: 14px; font-size: 13px; font-family: 'Inter', sans-serif; line-height: 1.6;
+        resize: vertical; outline: none; color: #1a1a2e; box-sizing: border-box;
+      }
+      .op-textarea:focus { border-color: #F97316; box-shadow: 0 0 0 3px rgba(249,115,22,0.12); }
+      .op-charcount { font-size: 11px; color: #999; text-align: right; margin-top: 6px; }
+      .op-charcount.warn { color: #EF4444; font-weight: 600; }
+
+      .op-actions {
+        display: flex; gap: 8px; padding: 0 16px 16px; justify-content: space-between; align-items: center;
+      }
+      .op-gen-btn {
+        display: inline-flex; align-items: center; gap: 6px; padding: 10px 18px;
+        font-size: 13px; font-weight: 600;
+        background: linear-gradient(135deg, #F59E0B, #F97316, #EF4444);
+        color: #fff; border: none; border-radius: 10px; cursor: pointer;
+        font-family: inherit; box-shadow: 0 2px 10px rgba(249,115,22,0.3);
+        transition: all 0.25s;
+      }
+      .op-gen-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 18px rgba(249,115,22,0.45); }
+      .op-sec-btn {
+        padding: 10px 16px; font-size: 12px; font-weight: 500;
+        background: #fff; color: #666; border: 1.5px solid #e0e0e5; border-radius: 10px;
+        cursor: pointer; font-family: inherit; transition: all 0.2s;
+      }
+      .op-sec-btn:hover { border-color: #F97316; color: #F97316; }
+
+      .op-insert-btn {
+        padding: 10px 16px; font-size: 12px; font-weight: 600;
+        background: #0077B5; color: #fff; border: none; border-radius: 10px;
+        cursor: pointer; font-family: inherit;
+      }
+      .op-insert-btn:hover { background: #005e8f; }
+
+      .op-cv-prompt {
+        padding: 12px 16px; background: rgba(249,115,22,0.04); border-top: 1px solid #f0f0f5;
+        font-size: 12px; color: #888; display: flex; align-items: center; gap: 10px;
+      }
+      .op-cv-prompt a { color: #F97316; font-weight: 600; text-decoration: none; cursor: pointer; }
+      .op-cv-prompt a:hover { text-decoration: underline; }
+
+      .op-footer {
+        padding: 10px 16px; background: #fafafa; border-top: 1px solid #f0f0f5;
+        text-align: center; font-size: 10px; color: #bbb; border-radius: 0 0 16px 16px;
+      }
+      .op-footer .op-hl { color: #F97316; font-weight: 700; }
+
+      .op-skel {
+        background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+        background-size: 200% 100%; animation: op-shimmer 1.5s infinite;
+        border-radius: 6px; height: 14px; margin-bottom: 8px;
+      }
+      .op-skel.s { width: 60%; } .op-skel.m { width: 80%; } .op-skel.l { width: 95%; }
+      @keyframes op-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+    `;
+    document.head.appendChild(style);
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // SECTION 2: Profile Data Scraping
+  // 2. Profile Data Scraping
   // ═══════════════════════════════════════════════════════════════
-  function scrapeProfileData() {
-    const data = {
-      name: '',
-      headline: '',
-      company: '',
-      location: '',
-      about: '',
-      profileUrl: window.location.href,
-      connectionDegree: '',
-      mutualConnections: '',
-      experience: [],
-    };
+  function scrapeProfile() {
+    const d = { name: '', headline: '', company: '', location: '', about: '', profileUrl: location.href };
 
-    // Name
-    const nameEl = document.querySelector(
-      '.text-heading-xlarge, h1.inline, .pv-top-card--list li:first-child, ' +
-      '.artdeco-entity-lockup__title .ember-view, ' +
-      'h1[class*="text-heading"]'
-    );
-    if (nameEl) data.name = nameEl.textContent.trim();
+    // Name — try multiple selectors
+    const nameEl = document.querySelector('h1') || document.querySelector('.text-heading-xlarge');
+    if (nameEl) d.name = nameEl.textContent.trim();
 
     // Headline
-    const headlineEl = document.querySelector(
-      '.text-body-medium.break-words, ' +
-      '.pv-top-card--list-bullet li, ' +
-      '.ph5 .mt2 .text-body-medium, ' +
-      '[data-anonymize="headline-text"]'
-    );
-    if (headlineEl) data.headline = headlineEl.textContent.trim();
+    const hlEl = document.querySelector('.text-body-medium.break-words') ||
+                 document.querySelector('[data-anonymize="headline-text"]');
+    if (hlEl) d.headline = hlEl.textContent.trim();
 
-    // Company — from headline split or experience section
-    if (data.headline && data.headline.includes(' at ')) {
-      data.company = data.headline.split(' at ').pop().trim();
-    } else if (data.headline && data.headline.includes(' @ ')) {
-      data.company = data.headline.split(' @ ').pop().trim();
-    }
-    if (!data.company) {
-      const companyEl = document.querySelector(
-        '.pv-text-details__right-panel-item-text, ' +
-        '.inline-show-more-text--is-collapsed, ' +
-        '[class*="experience"] [class*="subtitle"], ' +
-        'button[aria-label*="Current company"]'
-      );
-      if (companyEl) data.company = companyEl.textContent.trim().split('\n')[0].trim();
-    }
+    // Company from headline
+    if (d.headline.includes(' at ')) d.company = d.headline.split(' at ').pop().trim();
+    else if (d.headline.includes(' @ ')) d.company = d.headline.split(' @ ').pop().trim();
 
     // Location
-    const locationEl = document.querySelector(
-      '.text-body-small.inline.t-black--light.break-words, ' +
-      '.pv-top-card--list-bullet .text-body-small, ' +
-      'span.text-body-small[class*="location"]'
-    );
-    if (locationEl) data.location = locationEl.textContent.trim();
+    const locEl = document.querySelector('.text-body-small.inline.t-black--light.break-words');
+    if (locEl) d.location = locEl.textContent.trim();
 
     // About
-    const aboutSection = document.querySelector(
-      '#about ~ .display-flex .inline-show-more-text, ' +
-      '#about ~ .display-flex .pv-shared-text-with-see-more, ' +
-      'section.pv-about-section .pv-about__summary-text, ' +
-      '[class*="about"] .inline-show-more-text, ' +
-      'div.display-flex.full-width [class*="inline-show-more-text"]'
-    );
-    if (aboutSection) {
-      data.about = aboutSection.textContent.trim().substring(0, 600);
+    const aboutEl = document.querySelector('#about');
+    if (aboutEl) {
+      const container = aboutEl.closest('section');
+      if (container) {
+        const textEl = container.querySelector('.inline-show-more-text, .pv-shared-text-with-see-more, span[aria-hidden="true"]');
+        if (textEl) d.about = textEl.textContent.trim().substring(0, 500);
+      }
     }
 
-    // Connection degree
-    const degreeEl = document.querySelector(
-      '.dist-value, span.distance-badge .dist-value, ' +
-      '[class*="distance-badge"]'
-    );
-    if (degreeEl) data.connectionDegree = degreeEl.textContent.trim();
-
-    // Mutual connections
-    const mutualEl = document.querySelector(
-      '.pv-top-card--list-bullet li:nth-child(2), ' +
-      'a[href*="mutual-connections"], ' +
-      '[class*="mutual"]'
-    );
-    if (mutualEl) data.mutualConnections = mutualEl.textContent.trim();
-
-    return data;
+    return d;
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // SECTION 3: Button Injection
+  // 3. Find the Action Bar (robust multi-strategy)
   // ═══════════════════════════════════════════════════════════════
-  function injectOutreachButton() {
-    // Don't double-inject
+  function findActionBar() {
+    // Strategy 1: Direct selectors for known LinkedIn action bar containers
+    const directSelectors = [
+      '.pvs-profile-actions',
+      '.pv-top-card-v2-ctas',
+      '.pv-top-card-v3__action-bar',
+      '.pv-s-profile-actions',
+      '.scaffold-layout__main .ph5 .mt2 .display-flex',
+    ];
+    for (const sel of directSelectors) {
+      const el = document.querySelector(sel);
+      if (el) { console.log('[OutreachPro] Found action bar via:', sel); return el; }
+    }
+
+    // Strategy 2: Find a Message/Connect/Follow button and get its parent
+    const btnSelectors = [
+      'button[aria-label*="Message"]',
+      'button[aria-label*="message"]',
+      'a[href*="messaging"][class*="message"]',
+      'button[aria-label*="Connect"]',
+      'button[aria-label*="connect"]',
+      'button[aria-label*="Follow"]',
+      'button[aria-label*="follow"]',
+      'button[aria-label*="More actions"]',
+      'button[aria-label*="Pending"]',
+    ];
+    for (const sel of btnSelectors) {
+      const btn = document.querySelector(sel);
+      if (btn) {
+        // Walk up to find the flex container parent
+        let parent = btn.parentElement;
+        for (let i = 0; i < 5; i++) {
+          if (!parent) break;
+          const style = getComputedStyle(parent);
+          if (style.display === 'flex' || style.display === 'inline-flex') {
+            console.log('[OutreachPro] Found action bar via button parent:', sel);
+            return parent;
+          }
+          parent = parent.parentElement;
+        }
+        // Fallback: just use direct parent
+        console.log('[OutreachPro] Found action bar via button direct parent:', sel);
+        return btn.parentElement;
+      }
+    }
+
+    // Strategy 3: Look for all buttons in the top card area
+    const topCard = document.querySelector('.pv-top-card, .scaffold-layout__main .ph5, .artdeco-card');
+    if (topCard) {
+      const buttons = topCard.querySelectorAll('button');
+      for (const btn of buttons) {
+        const text = btn.textContent.trim().toLowerCase();
+        if (text === 'message' || text === 'connect' || text === 'follow' || text === 'more') {
+          let parent = btn.parentElement;
+          for (let i = 0; i < 3; i++) {
+            if (!parent) break;
+            const children = parent.children.length;
+            if (children >= 2 && children <= 8) {
+              console.log('[OutreachPro] Found action bar via text search');
+              return parent;
+            }
+            parent = parent.parentElement;
+          }
+        }
+      }
+    }
+
+    console.log('[OutreachPro] Action bar not found');
+    return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 4. Button Injection
+  // ═══════════════════════════════════════════════════════════════
+  function injectButton() {
+    // Guard: not a profile page
+    if (!location.pathname.startsWith('/in/')) return;
+    // Guard: already injected
     if (document.querySelector('.' + WRAPPER_CLASS)) return;
 
-    // Only on profile pages
-    if (!window.location.pathname.startsWith('/in/')) return;
-
-    // Find LinkedIn's action bar — the container with Message/Connect/Follow/More buttons
     const actionBar = findActionBar();
     if (!actionBar) return;
 
-    // Create wrapper
     const wrapper = document.createElement('div');
     wrapper.className = WRAPPER_CLASS;
-    wrapper.style.display = 'inline-flex';
-    wrapper.style.position = 'relative';
-    wrapper.style.alignItems = 'center';
 
-    // Create AI badge
     const badge = document.createElement('span');
     badge.className = 'outreach-pro-badge';
     badge.textContent = '✨ AI Powered';
 
-    // Create button
     const btn = document.createElement('button');
     btn.className = BUTTON_CLASS;
-    btn.innerHTML = `
-      <span class="ai-sparkle">✨</span>
-      <span>Connect with AI message</span>
-    `;
+    btn.innerHTML = '<span class="ai-spark">✨</span><span>Connect with AI message</span>';
     btn.title = 'Generate personalized outreach with AI';
 
     btn.addEventListener('click', (e) => {
@@ -161,726 +360,314 @@
 
     wrapper.appendChild(badge);
     wrapper.appendChild(btn);
-
-    // Insert after the action bar buttons
     actionBar.appendChild(wrapper);
 
-    console.log('[OutreachPro] Button injected successfully');
-  }
-
-  function findActionBar() {
-    // LinkedIn profile action bar selectors (multiple variants for different layouts)
-    const selectors = [
-      // New LinkedIn layout
-      '.pvs-profile-actions',
-      '.pv-top-card-v2-ctas',
-      // Classic layout action buttons container
-      '.pv-top-card-v3__action-bar',
-      '.pv-s-profile-actions',
-      '.pv-top-card__action-bar',
-      // Flexbox container with the buttons
-      '.pvs-profile-actions__action',
-      // Parent of the Message/Connect buttons
-      '.artdeco-card .mt2 .display-flex',
-    ];
-
-    for (const sel of selectors) {
-      const el = document.querySelector(sel);
-      if (el) return el;
-    }
-
-    // Fallback: find the container that holds the "Message" or "Connect" button
-    const messageBtn = document.querySelector(
-      'button[aria-label*="Message"], ' +
-      'a[aria-label*="Message"], ' +
-      'button[aria-label*="Connect"], ' +
-      'button[aria-label*="Follow"]'
-    );
-    if (messageBtn) {
-      return messageBtn.parentElement;
-    }
-
-    return null;
+    console.log('[OutreachPro] ✅ Button injected!');
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // SECTION 4: Outreach Panel
+  // 5. Panel Toggle & Build
   // ═══════════════════════════════════════════════════════════════
   function togglePanel(wrapper) {
-    if (currentPanel) {
-      currentPanel.remove();
-      currentPanel = null;
-      return;
-    }
+    if (currentPanel) { currentPanel.remove(); currentPanel = null; return; }
 
-    const profileData = scrapeProfileData();
-    const panel = createPanel(profileData);
+    const profile = scrapeProfile();
+    const panel = document.createElement('div');
+    panel.className = PANEL_CLASS;
+    const name = profile.name || 'LinkedIn User';
+    const hl = profile.headline ? (profile.headline.length > 55 ? profile.headline.substring(0, 52) + '...' : profile.headline) : '';
+
+    panel.innerHTML = `
+      <div class="op-header">
+        <button class="op-close" id="op-close">×</button>
+        <div class="op-name">${esc(name)}</div>
+        ${hl ? '<div class="op-headline">' + esc(hl) + '</div>' : ''}
+        <div class="op-unlimited"><span>∞</span> Unlimited — No limits, no tokens</div>
+      </div>
+      <div class="op-tabs">
+        <button class="op-tab active" data-t="connection_request">🤝 Connection</button>
+        <button class="op-tab" data-t="direct_message">💬 DM</button>
+        <button class="op-tab" data-t="email">✉️ Email</button>
+        <button class="op-tab" data-t="follow_up">🔄 Follow-up</button>
+      </div>
+      <div class="op-tones">
+        <button class="op-tone active" data-tone="professional">Professional</button>
+        <button class="op-tone" data-tone="casual">Casual</button>
+        <button class="op-tone" data-tone="enthusiastic">Enthusiastic</button>
+        <button class="op-tone" data-tone="witty">Witty</button>
+      </div>
+      <div class="op-msg-area">
+        <div id="op-skel"><div class="op-skel l"></div><div class="op-skel m"></div><div class="op-skel l"></div><div class="op-skel s"></div></div>
+        <textarea class="op-textarea" id="op-textarea" placeholder="Click Generate to create your message..." style="display:none;"></textarea>
+        <div class="op-charcount" id="op-charcount" style="display:none;"></div>
+      </div>
+      <div class="op-actions">
+        <button class="op-gen-btn" id="op-gen">✨ Generate Message</button>
+        <div style="display:flex;gap:6px;">
+          <button class="op-sec-btn" id="op-copy" style="display:none;">📋 Copy</button>
+          <button class="op-insert-btn" id="op-insert" style="display:none;">➤ Insert</button>
+        </div>
+      </div>
+      <div class="op-cv-prompt" id="op-cv-prompt">
+        <span>📄</span><span><a id="op-cv-link">Upload your CV</a> for better personalization</span>
+      </div>
+      <div class="op-footer">Powered by <span class="op-hl">OutreachPro</span> — <span class="op-hl">∞ Unlimited</span> messages</div>
+    `;
+
     wrapper.appendChild(panel);
     currentPanel = panel;
 
-    // Close on outside click
+    // Close handlers
+    panel.querySelector('#op-close').onclick = () => { panel.remove(); currentPanel = null; };
     setTimeout(() => {
-      const closeHandler = (e) => {
-        if (!panel.contains(e.target) && !wrapper.querySelector('.' + BUTTON_CLASS).contains(e.target)) {
-          panel.remove();
-          currentPanel = null;
-          document.removeEventListener('click', closeHandler, true);
+      const handler = (e) => {
+        if (currentPanel && !panel.contains(e.target) && !wrapper.querySelector('.' + BUTTON_CLASS).contains(e.target)) {
+          panel.remove(); currentPanel = null;
+          document.removeEventListener('click', handler, true);
         }
       };
-      document.addEventListener('click', closeHandler, true);
-    }, 100);
+      document.addEventListener('click', handler, true);
+    }, 150);
 
-    // Load user CV data and set up handlers
-    loadUserCVAndSetup(panel, profileData);
+    setupPanelHandlers(panel, profile);
   }
 
-  function createPanel(profileData) {
-    const panel = document.createElement('div');
-    panel.className = PANEL_CLASS;
+  // ═══════════════════════════════════════════════════════════════
+  // 6. Panel Handlers
+  // ═══════════════════════════════════════════════════════════════
+  async function setupPanelHandlers(panel, profile) {
+    let type = 'connection_request';
+    let tone = 'professional';
 
-    const name = profileData.name || 'LinkedIn User';
-    const headline = profileData.headline || '';
-    const truncatedHeadline = headline.length > 60 ? headline.substring(0, 57) + '...' : headline;
-
-    panel.innerHTML = `
-      <!-- Header -->
-      <div class="outreach-pro-panel-header">
-        <button class="close-btn" id="outreach-close-btn">×</button>
-        <div class="prospect-name">${escapeHtml(name)}</div>
-        ${truncatedHeadline ? `<div class="prospect-headline">${escapeHtml(truncatedHeadline)}</div>` : ''}
-        <div class="unlimited-badge">
-          <span>∞</span>
-          <span>Unlimited — No limits, no tokens</span>
-        </div>
-      </div>
-
-      <!-- Tabs -->
-      <div class="outreach-pro-tabs">
-        <button class="outreach-pro-tab active" data-type="connection_request">
-          <span class="tab-icon">🤝</span>
-          Connection
-        </button>
-        <button class="outreach-pro-tab" data-type="direct_message">
-          <span class="tab-icon">💬</span>
-          Direct Msg
-        </button>
-        <button class="outreach-pro-tab" data-type="email">
-          <span class="tab-icon">✉️</span>
-          Email
-        </button>
-        <button class="outreach-pro-tab" data-type="follow_up">
-          <span class="tab-icon">🔄</span>
-          Follow-up
-        </button>
-      </div>
-
-      <!-- Tone Selector -->
-      <div class="outreach-pro-tone-bar">
-        <button class="outreach-pro-tone-btn active" data-tone="professional">Professional</button>
-        <button class="outreach-pro-tone-btn" data-tone="casual">Casual</button>
-        <button class="outreach-pro-tone-btn" data-tone="enthusiastic">Enthusiastic</button>
-        <button class="outreach-pro-tone-btn" data-tone="witty">Witty</button>
-      </div>
-
-      <!-- Message Area -->
-      <div class="outreach-pro-message-area">
-        <div id="outreach-skeleton-loader">
-          <div class="outreach-pro-skeleton line-long"></div>
-          <div class="outreach-pro-skeleton line-medium"></div>
-          <div class="outreach-pro-skeleton line-long"></div>
-          <div class="outreach-pro-skeleton line-short"></div>
-        </div>
-        <textarea
-          class="outreach-pro-textarea"
-          id="outreach-message-textarea"
-          placeholder="Click 'Generate' to create your personalized message..."
-          style="display: none;"
-        ></textarea>
-        <div class="outreach-pro-char-count" id="outreach-char-count" style="display: none;"></div>
-      </div>
-
-      <!-- Actions -->
-      <div class="outreach-pro-actions">
-        <button class="outreach-pro-generate-btn" id="outreach-generate-btn">
-          <span>✨</span>
-          <span>Generate Message</span>
-        </button>
-        <div style="display: flex; gap: 6px;">
-          <button class="outreach-pro-secondary-btn" id="outreach-copy-btn" style="display: none;">
-            📋 Copy
-          </button>
-          <button class="outreach-pro-insert-btn" id="outreach-insert-btn" style="display: none;">
-            ➤ Insert
-          </button>
-        </div>
-      </div>
-
-      <!-- CV Prompt -->
-      <div class="outreach-pro-cv-prompt" id="outreach-cv-prompt">
-        <span>📄</span>
-        <span>
-          <a id="outreach-upload-cv-link">Upload your CV/Resume</a> for better personalization
-        </span>
-      </div>
-
-      <!-- Footer -->
-      <div class="outreach-pro-footer">
-        Powered by <span class="unlimited-text">OutreachPro</span> — <span class="unlimited-text">∞ Unlimited</span> messages, zero limits
-      </div>
-    `;
-
-    return panel;
-  }
-
-  async function loadUserCVAndSetup(panel, profileData) {
-    let userCV = { name: '', summary: '', skills: '', experience: '' };
-    let currentType = 'connection_request';
-    let currentTone = 'professional';
-
-    // Load user CV from storage
+    // Load CV from storage
+    let cv = { name: '', summary: '', skills: '', experience: '' };
     try {
-      const result = await new Promise(resolve => {
-        chrome.storage.local.get('outreach_pro_user_cv', r => resolve(r));
-      });
-      if (result.outreach_pro_user_cv) {
-        userCV = result.outreach_pro_user_cv;
-        // Hide CV prompt if user has data
-        if (userCV.summary || userCV.skills || userCV.experience) {
-          const cvPrompt = panel.querySelector('#outreach-cv-prompt');
-          if (cvPrompt) cvPrompt.style.display = 'none';
+      const r = await chrome.storage.local.get('outreach_pro_user_cv');
+      if (r.outreach_pro_user_cv) {
+        cv = r.outreach_pro_user_cv;
+        if (cv.summary || cv.skills || cv.experience) {
+          const prompt = panel.querySelector('#op-cv-prompt');
+          if (prompt) prompt.style.display = 'none';
         }
-      }
-    } catch (e) {
-      console.warn('[OutreachPro] Could not load CV:', e);
-    }
-
-    // Load settings for default tone
-    try {
-      const settingsResult = await new Promise(resolve => {
-        chrome.storage.local.get('outreach_pro_settings', r => resolve(r));
-      });
-      if (settingsResult.outreach_pro_settings && settingsResult.outreach_pro_settings.defaultTone) {
-        currentTone = settingsResult.outreach_pro_settings.defaultTone;
-        // Update UI
-        panel.querySelectorAll('.outreach-pro-tone-btn').forEach(btn => {
-          btn.classList.toggle('active', btn.dataset.tone === currentTone);
-        });
       }
     } catch (e) {}
 
-    const textarea = panel.querySelector('#outreach-message-textarea');
-    const charCount = panel.querySelector('#outreach-char-count');
-    const skeleton = panel.querySelector('#outreach-skeleton-loader');
-    const generateBtn = panel.querySelector('#outreach-generate-btn');
-    const copyBtn = panel.querySelector('#outreach-copy-btn');
-    const insertBtn = panel.querySelector('#outreach-insert-btn');
-    const closeBtn = panel.querySelector('#outreach-close-btn');
+    const textarea = panel.querySelector('#op-textarea');
+    const charcount = panel.querySelector('#op-charcount');
+    const skel = panel.querySelector('#op-skel');
+    const genBtn = panel.querySelector('#op-gen');
+    const copyBtn = panel.querySelector('#op-copy');
+    const insertBtn = panel.querySelector('#op-insert');
 
-    // Close button
-    closeBtn.addEventListener('click', () => {
-      panel.remove();
-      currentPanel = null;
-    });
-
-    // Tab switching
-    panel.querySelectorAll('.outreach-pro-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        panel.querySelectorAll('.outreach-pro-tab').forEach(t => t.classList.remove('active'));
+    // Tabs
+    panel.querySelectorAll('.op-tab').forEach(tab => {
+      tab.onclick = () => {
+        panel.querySelectorAll('.op-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
-        currentType = tab.dataset.type;
-
-        // Show/hide insert button based on type
-        if (currentType === 'connection_request' || currentType === 'direct_message') {
-          insertBtn.style.display = 'inline-flex';
-        } else {
-          insertBtn.style.display = 'none';
-        }
-
-        // Auto-regenerate if textarea is visible
-        if (textarea.style.display !== 'none') {
-          doGenerate();
-        }
-      });
+        type = tab.dataset.t;
+        if (textarea.style.display !== 'none') doGenerate();
+      };
     });
 
-    // Tone switching
-    panel.querySelectorAll('.outreach-pro-tone-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        panel.querySelectorAll('.outreach-pro-tone-btn').forEach(b => b.classList.remove('active'));
+    // Tones
+    panel.querySelectorAll('.op-tone').forEach(btn => {
+      btn.onclick = () => {
+        panel.querySelectorAll('.op-tone').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        currentTone = btn.dataset.tone;
-
-        // Auto-regenerate if textarea visible
-        if (textarea.style.display !== 'none') {
-          doGenerate();
-        }
-      });
+        tone = btn.dataset.tone;
+        if (textarea.style.display !== 'none') doGenerate();
+      };
     });
 
-    // Generate button
+    // Generate
     function doGenerate() {
-      generateBtn.classList.add('generating');
-      generateBtn.innerHTML = '<span>⏳</span><span>Writing drafts...</span>';
-      skeleton.style.display = 'block';
+      genBtn.innerHTML = '⏳ Writing drafts...';
+      skel.style.display = 'block';
       textarea.style.display = 'none';
-      charCount.style.display = 'none';
+      charcount.style.display = 'none';
       copyBtn.style.display = 'none';
       insertBtn.style.display = 'none';
 
-      // Small delay for the animation feel (like the FlyMSG screenshot)
       setTimeout(() => {
-        const result = window.OutreachMessageGenerator.generate(
-          currentType,
-          profileData,
-          userCV,
-          currentTone
-        );
-
+        const result = window.OutreachMessageGenerator.generate(type, profile, cv, tone);
         textarea.value = result.message;
         textarea.style.display = 'block';
-        skeleton.style.display = 'none';
+        skel.style.display = 'none';
         copyBtn.style.display = 'inline-flex';
-
-        // Show insert for connection/DM
-        if (currentType === 'connection_request' || currentType === 'direct_message') {
+        if (type === 'connection_request' || type === 'direct_message') {
           insertBtn.style.display = 'inline-flex';
         }
-
-        // Char count for connection request
         if (result.charCount !== undefined) {
-          charCount.style.display = 'block';
-          charCount.textContent = `${result.charCount} / ${result.limit || 300} characters`;
-          charCount.classList.toggle('warning', result.charCount > (result.limit || 300));
+          charcount.style.display = 'block';
+          charcount.textContent = result.charCount + ' / ' + (result.limit || 300) + ' characters';
+          charcount.className = 'op-charcount' + (result.charCount > (result.limit || 300) ? ' warn' : '');
         } else {
-          charCount.style.display = 'block';
-          charCount.textContent = `${result.message.length} characters`;
-          charCount.classList.remove('warning');
+          charcount.style.display = 'block';
+          charcount.textContent = result.message.length + ' characters';
+          charcount.className = 'op-charcount';
         }
-
-        generateBtn.classList.remove('generating');
-        generateBtn.innerHTML = '<span>✨</span><span>Regenerate</span>';
-      }, 800);
+        genBtn.innerHTML = '✨ Regenerate';
+      }, 700);
     }
 
-    generateBtn.addEventListener('click', doGenerate);
+    genBtn.onclick = doGenerate;
+    doGenerate(); // auto-generate on open
 
-    // Auto-generate on first open
-    doGenerate();
-
-    // Textarea char count update
-    textarea.addEventListener('input', () => {
+    // Textarea live char count
+    textarea.oninput = () => {
       const len = textarea.value.length;
-      if (currentType === 'connection_request') {
-        charCount.textContent = `${len} / 300 characters`;
-        charCount.classList.toggle('warning', len > 300);
+      if (type === 'connection_request') {
+        charcount.textContent = len + ' / 300 characters';
+        charcount.className = 'op-charcount' + (len > 300 ? ' warn' : '');
       } else {
-        charCount.textContent = `${len} characters`;
-        charCount.classList.remove('warning');
+        charcount.textContent = len + ' characters';
+        charcount.className = 'op-charcount';
       }
-    });
+    };
 
-    // Copy button
-    copyBtn.addEventListener('click', () => {
+    // Copy
+    copyBtn.onclick = () => {
       navigator.clipboard.writeText(textarea.value).then(() => {
-        copyBtn.innerHTML = '✅ Copied!';
-        copyBtn.classList.add('copied');
-        setTimeout(() => {
-          copyBtn.innerHTML = '📋 Copy';
-          copyBtn.classList.remove('copied');
-        }, 2000);
+        copyBtn.textContent = '✅ Copied!';
+        setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 2000);
       });
-    });
+    };
 
-    // Insert button — insert into LinkedIn's message box or connection note
-    insertBtn.addEventListener('click', () => {
-      insertMessageIntoLinkedIn(textarea.value, currentType);
-    });
+    // Insert into LinkedIn
+    insertBtn.onclick = () => {
+      if (type === 'connection_request') {
+        const connectBtn = document.querySelector('button[aria-label*="Connect"], button[aria-label*="Invite"]');
+        if (connectBtn) {
+          connectBtn.click();
+          setTimeout(() => {
+            const addNote = document.querySelector('button[aria-label="Add a note"], button.artdeco-button--secondary');
+            if (addNote) { addNote.click(); setTimeout(() => {
+              const ta = document.querySelector('textarea[name="message"], textarea#custom-message, .send-invite__custom-message');
+              if (ta) { ta.value = textarea.value; ta.dispatchEvent(new Event('input', {bubbles:true})); }
+            }, 500); }
+          }, 800);
+        }
+      } else {
+        const msgBtn = document.querySelector('button[aria-label*="Message"], a[aria-label*="Message"]');
+        if (msgBtn) {
+          msgBtn.click();
+          setTimeout(() => {
+            const box = document.querySelector('.msg-form__contenteditable, div[role="textbox"][contenteditable="true"]');
+            if (box) { box.focus(); box.innerHTML = '<p>' + esc(textarea.value) + '</p>'; box.dispatchEvent(new Event('input', {bubbles:true})); }
+          }, 1000);
+        }
+      }
+    };
 
     // CV upload link
-    const cvLink = panel.querySelector('#outreach-upload-cv-link');
+    const cvLink = panel.querySelector('#op-cv-link');
     if (cvLink) {
-      cvLink.addEventListener('click', (e) => {
+      cvLink.onclick = (e) => {
         e.preventDefault();
-        openCVUploadModal(panel);
-      });
+        openCVModal(panel);
+      };
     }
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // SECTION 5: LinkedIn Message Insert
+  // 7. CV Upload Modal
   // ═══════════════════════════════════════════════════════════════
-  function insertMessageIntoLinkedIn(message, type) {
-    if (type === 'connection_request') {
-      // Click the Connect button first
-      const connectBtn = document.querySelector(
-        'button[aria-label*="Connect"], ' +
-        'button[aria-label*="connect"], ' +
-        'button.pvs-profile-actions__action[aria-label*="Invite"]'
-      );
-      if (connectBtn) {
-        connectBtn.click();
-        // Wait for the modal to open
-        setTimeout(() => {
-          // Click "Add a note" button
-          const addNoteBtn = document.querySelector(
-            'button[aria-label="Add a note"], ' +
-            'button.artdeco-modal__actionbar .artdeco-button--secondary'
-          );
-          if (addNoteBtn) {
-            addNoteBtn.click();
-            setTimeout(() => {
-              // Find the textarea and insert the message
-              const noteTextarea = document.querySelector(
-                'textarea[name="message"], ' +
-                'textarea#custom-message, ' +
-                '.artdeco-modal textarea, ' +
-                '.send-invite__custom-message'
-              );
-              if (noteTextarea) {
-                noteTextarea.value = message;
-                noteTextarea.dispatchEvent(new Event('input', { bubbles: true }));
-                noteTextarea.dispatchEvent(new Event('change', { bubbles: true }));
-              }
-            }, 500);
-          }
-        }, 800);
-      }
-    } else if (type === 'direct_message') {
-      // Click the Message button
-      const messageBtn = document.querySelector(
-        'button[aria-label*="Message"], ' +
-        'a[aria-label*="Message"]'
-      );
-      if (messageBtn) {
-        messageBtn.click();
-        setTimeout(() => {
-          // Find the messaging input
-          const msgInput = document.querySelector(
-            '.msg-form__contenteditable, ' +
-            'div[role="textbox"][contenteditable="true"], ' +
-            '.msg-form__msg-content-container div[contenteditable]'
-          );
-          if (msgInput) {
-            msgInput.focus();
-            // For contenteditable divs
-            msgInput.innerHTML = `<p>${escapeHtml(message)}</p>`;
-            msgInput.dispatchEvent(new Event('input', { bubbles: true }));
-          }
-        }, 1000);
-      }
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════════
-  // SECTION 6: Inline CV Upload Modal
-  // ═══════════════════════════════════════════════════════════════
-  function openCVUploadModal(parentPanel) {
-    // Create a modal overlay inside the panel
+  function openCVModal(parentPanel) {
     const modal = document.createElement('div');
-    modal.style.cssText = `
-      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(255,255,255,0.98); backdrop-filter: blur(10px);
-      z-index: 10; padding: 20px; overflow-y: auto;
-      font-family: 'Inter', -apple-system, sans-serif;
-      display: flex; flex-direction: column; border-radius: 16px;
-    `;
-
+    modal.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,0.98);z-index:10;padding:20px;overflow-y:auto;font-family:Inter,sans-serif;border-radius:16px;display:flex;flex-direction:column;';
     modal.innerHTML = `
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <h3 style="font-size: 16px; font-weight: 700; color: #1a1a2e; margin: 0;">📄 Upload Your Background</h3>
-        <button id="cv-modal-close" style="background: #f0f0f5; border: none; width: 30px; height: 30px; border-radius: 50%; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center;">×</button>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h3 style="font-size:16px;font-weight:700;margin:0">📄 Upload Your Background</h3>
+        <button id="cv-close" style="background:#f0f0f5;border:none;width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:16px">×</button>
       </div>
-      
-      <p style="font-size: 12px; color: #888; margin-bottom: 16px;">Upload your CV or paste your resume text so generated messages match your background better.</p>
-      
-      <div style="margin-bottom: 16px;">
-        <label style="font-size: 12px; font-weight: 600; color: #555; display: block; margin-bottom: 6px;">Your Name</label>
-        <input type="text" id="cv-name-input" placeholder="John Smith" style="
-          width: 100%; padding: 10px 14px; border: 1.5px solid #e0e0e5; border-radius: 10px;
-          font-size: 13px; font-family: inherit; outline: none; box-sizing: border-box;
-          transition: border-color 0.2s;
-        " />
-      </div>
-
-      <div style="margin-bottom: 16px;">
-        <label style="font-size: 12px; font-weight: 600; color: #555; display: block; margin-bottom: 6px;">Resume / CV Text</label>
-        <textarea id="cv-text-input" placeholder="Paste your resume text here... Include your summary, skills, and experience." style="
-          width: 100%; min-height: 120px; padding: 12px 14px; border: 1.5px solid #e0e0e5;
-          border-radius: 10px; font-size: 12px; font-family: inherit; resize: vertical;
-          outline: none; line-height: 1.6; box-sizing: border-box; transition: border-color 0.2s;
-        "></textarea>
-      </div>
-
-      <div style="margin-bottom: 16px;">
-        <label style="font-size: 12px; font-weight: 600; color: #555; display: block; margin-bottom: 6px;">Or upload a .txt file</label>
-        <input type="file" id="cv-file-input" accept=".txt,.text" style="font-size: 12px; font-family: inherit;" />
-      </div>
-
-      <div style="margin-bottom: 16px;">
-        <label style="font-size: 12px; font-weight: 600; color: #555; display: block; margin-bottom: 6px;">Website / Portfolio URL <span style="color: #bbb;">(optional)</span></label>
-        <input type="url" id="cv-website-input" placeholder="https://yourwebsite.com" style="
-          width: 100%; padding: 10px 14px; border: 1.5px solid #e0e0e5; border-radius: 10px;
-          font-size: 13px; font-family: inherit; outline: none; box-sizing: border-box;
-          transition: border-color 0.2s;
-        " />
-      </div>
-
-      <button id="cv-save-btn" style="
-        width: 100%; padding: 12px; font-size: 14px; font-weight: 600;
-        background: linear-gradient(135deg, #F59E0B, #F97316, #EF4444);
-        color: white; border: none; border-radius: 10px; cursor: pointer;
-        font-family: inherit; transition: opacity 0.2s;
-        box-shadow: 0 3px 12px rgba(249, 115, 22, 0.3);
-      ">💾 Save & Personalize</button>
-
-      <p style="font-size: 10px; color: #bbb; text-align: center; margin-top: 10px;">
-        All data stored locally in your browser — never sent to external servers.
-      </p>
+      <p style="font-size:12px;color:#888;margin-bottom:16px">Paste your resume text so AI-generated messages match your background.</p>
+      <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Your Name</label>
+        <input type="text" id="cv-name" placeholder="John Smith" style="width:100%;padding:10px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:13px;font-family:inherit;outline:none;box-sizing:border-box" /></div>
+      <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Resume / CV Text</label>
+        <textarea id="cv-text" placeholder="Paste resume text here..." style="width:100%;min-height:120px;padding:12px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:12px;font-family:inherit;resize:vertical;outline:none;box-sizing:border-box"></textarea></div>
+      <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Website URL (optional)</label>
+        <input type="url" id="cv-web" placeholder="https://yoursite.com" style="width:100%;padding:10px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:13px;font-family:inherit;outline:none;box-sizing:border-box" /></div>
+      <button id="cv-save" style="width:100%;padding:12px;font-size:14px;font-weight:600;background:linear-gradient(135deg,#F59E0B,#F97316,#EF4444);color:#fff;border:none;border-radius:10px;cursor:pointer;font-family:inherit;box-shadow:0 3px 12px rgba(249,115,22,0.3)">💾 Save & Personalize</button>
+      <p style="font-size:10px;color:#bbb;text-align:center;margin-top:10px">All data stored locally. Never sent externally.</p>
     `;
-
     parentPanel.appendChild(modal);
 
-    // Load existing data
-    chrome.storage.local.get('outreach_pro_user_cv', (result) => {
-      const cv = result.outreach_pro_user_cv || {};
-      const nameInput = modal.querySelector('#cv-name-input');
-      const textInput = modal.querySelector('#cv-text-input');
-      const websiteInput = modal.querySelector('#cv-website-input');
-
-      if (cv.name) nameInput.value = cv.name;
-      if (cv.rawText) textInput.value = cv.rawText;
-      if (cv.website) websiteInput.value = cv.website;
+    // Load existing
+    chrome.storage.local.get('outreach_pro_user_cv', (r) => {
+      const c = r.outreach_pro_user_cv || {};
+      if (c.name) modal.querySelector('#cv-name').value = c.name;
+      if (c.rawText) modal.querySelector('#cv-text').value = c.rawText;
+      if (c.website) modal.querySelector('#cv-web').value = c.website;
     });
 
-    // File upload handler
-    modal.querySelector('#cv-file-input').addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        modal.querySelector('#cv-text-input').value = ev.target.result;
-      };
-      reader.readAsText(file);
-    });
-
-    // Close
-    modal.querySelector('#cv-modal-close').addEventListener('click', () => {
-      modal.remove();
-    });
-
-    // Save
-    modal.querySelector('#cv-save-btn').addEventListener('click', () => {
-      const name = modal.querySelector('#cv-name-input').value.trim();
-      const rawText = modal.querySelector('#cv-text-input').value.trim();
-      const website = modal.querySelector('#cv-website-input').value.trim();
-
-      // Parse the resume text
-      const parsed = window.CVManager
-        ? window.CVManager.parseResumeText(rawText)
-        : parseResumeTextSimple(rawText);
-
+    modal.querySelector('#cv-close').onclick = () => modal.remove();
+    modal.querySelector('#cv-save').onclick = () => {
+      const name = modal.querySelector('#cv-name').value.trim();
+      const raw = modal.querySelector('#cv-text').value.trim();
+      const web = modal.querySelector('#cv-web').value.trim();
+      const lines = raw.split('\n').filter(l => l.trim());
       const cvData = {
-        name: name || parsed.name,
-        email: parsed.email || '',
-        phone: parsed.phone || '',
-        summary: parsed.summary || '',
-        skills: parsed.skills || '',
-        experience: parsed.experience || '',
-        education: parsed.education || '',
-        website: website,
-        rawText: rawText,
+        name: name || (lines[0] && lines[0].length < 60 ? lines[0] : ''),
+        summary: lines.slice(1, 5).join(' ').substring(0, 400),
+        skills: '', experience: lines.slice(5).join(' ').substring(0, 600),
+        education: '', rawText: raw, website: web,
         lastUpdated: new Date().toISOString(),
       };
-
       chrome.storage.local.set({ outreach_pro_user_cv: cvData }, () => {
-        // Update save button
-        const saveBtn = modal.querySelector('#cv-save-btn');
-        saveBtn.textContent = '✅ Saved!';
-        saveBtn.style.background = '#10B981';
-
-        // Hide CV prompt in parent panel
-        const cvPrompt = parentPanel.querySelector('#outreach-cv-prompt');
-        if (cvPrompt) cvPrompt.style.display = 'none';
-
-        setTimeout(() => {
-          modal.remove();
-        }, 1000);
+        const btn = modal.querySelector('#cv-save');
+        btn.textContent = '✅ Saved!';
+        btn.style.background = '#10B981';
+        const prompt = parentPanel.querySelector('#op-cv-prompt');
+        if (prompt) prompt.style.display = 'none';
+        setTimeout(() => modal.remove(), 1000);
       });
-    });
-  }
-
-  // Simple fallback parser if CVManager isn't loaded
-  function parseResumeTextSimple(rawText) {
-    const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
-    return {
-      name: lines[0] && lines[0].length < 60 ? lines[0] : '',
-      email: (rawText.match(/[\w.+-]+@[\w.-]+\.\w{2,}/) || [''])[0],
-      phone: '',
-      summary: lines.slice(1, 5).join(' ').substring(0, 400),
-      skills: '',
-      experience: lines.slice(5).join(' ').substring(0, 600),
-      education: '',
     };
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // SECTION 7: Utility
+  // 8. Utilities
   // ═══════════════════════════════════════════════════════════════
-  function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-  }
+  function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
   // ═══════════════════════════════════════════════════════════════
-  // SECTION 8: SPA Navigation Observer
+  // 9. SPA Observer & Init
   // ═══════════════════════════════════════════════════════════════
   function startObserving() {
     if (observer) observer.disconnect();
-
-    let debounceTimer = null;
+    let timer = null;
     observer = new MutationObserver(() => {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        if (window.location.pathname.startsWith('/in/') && !document.querySelector('.' + WRAPPER_CLASS)) {
-          injectOutreachButton();
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (location.pathname.startsWith('/in/') && !document.querySelector('.' + WRAPPER_CLASS)) {
+          injectButton();
         }
-      }, 800);
+      }, 1000);
     });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
+    observer.observe(document.body, { childList: true, subtree: true });
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // SECTION 9: Search Results Button Injection
-  // ═══════════════════════════════════════════════════════════════
-  function injectSearchResultButtons() {
-    if (!window.location.pathname.includes('/search/')) return;
-
-    const resultCards = document.querySelectorAll(
-      '.entity-result, .reusable-search__result-container'
-    );
-
-    resultCards.forEach(card => {
-      if (card.querySelector('.' + BUTTON_CLASS)) return;
-
-      const nameLink = card.querySelector(
-        'a[href*="/in/"] span[aria-hidden="true"], ' +
-        '.entity-result__title-text a span[aria-hidden="true"]'
-      );
-      if (!nameLink) return;
-
-      const actionsContainer = card.querySelector(
-        '.entity-result__actions, ' +
-        '.search-result__actions, ' +
-        '.entity-result__simple-insight'
-      );
-      if (!actionsContainer) return;
-
-      const miniWrapper = document.createElement('div');
-      miniWrapper.className = WRAPPER_CLASS;
-      miniWrapper.style.display = 'inline-flex';
-      miniWrapper.style.position = 'relative';
-      miniWrapper.style.marginTop = '4px';
-
-      const miniBtn = document.createElement('button');
-      miniBtn.className = BUTTON_CLASS;
-      miniBtn.style.height = '28px';
-      miniBtn.style.fontSize = '11px';
-      miniBtn.style.padding = '0 14px';
-      miniBtn.innerHTML = `<span class="ai-sparkle">✨</span><span>AI Outreach</span>`;
-
-      miniBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        // Scrape mini profile data from the search card
-        const profileData = {
-          name: nameLink.textContent.trim(),
-          headline: '',
-          company: '',
-          location: '',
-          about: '',
-          profileUrl: (nameLink.closest('a') || {}).href || '',
-        };
-
-        const headlineEl = card.querySelector(
-          '.entity-result__primary-subtitle, ' +
-          '.entity-result__summary'
-        );
-        if (headlineEl) profileData.headline = headlineEl.textContent.trim();
-
-        const locationEl = card.querySelector('.entity-result__secondary-subtitle');
-        if (locationEl) profileData.location = locationEl.textContent.trim();
-
-        toggleMiniPanel(miniWrapper, profileData);
-      });
-
-      miniWrapper.appendChild(miniBtn);
-      actionsContainer.appendChild(miniWrapper);
-    });
-  }
-
-  function toggleMiniPanel(wrapper, profileData) {
-    if (currentPanel) {
-      currentPanel.remove();
-      currentPanel = null;
-      return;
-    }
-
-    const panel = createPanel(profileData);
-    panel.style.width = '380px';
-    panel.style.right = '0';
-    wrapper.appendChild(panel);
-    currentPanel = panel;
-
-    setTimeout(() => {
-      const closeHandler = (e) => {
-        if (!panel.contains(e.target) && !wrapper.contains(e.target)) {
-          panel.remove();
-          currentPanel = null;
-          document.removeEventListener('click', closeHandler, true);
-        }
-      };
-      document.addEventListener('click', closeHandler, true);
-    }, 100);
-
-    loadUserCVAndSetup(panel, profileData);
-  }
-
-  // ═══════════════════════════════════════════════════════════════
-  // SECTION 10: Init
-  // ═══════════════════════════════════════════════════════════════
   function init() {
-    if (!window.location.hostname.includes('linkedin.com')) return;
-
-    console.log('[OutreachPro] Initializing...');
+    if (!location.hostname.includes('linkedin.com')) return;
+    console.log('[OutreachPro] Initializing on:', location.href);
     injectStyles();
 
-    // Initial injection
-    setTimeout(injectOutreachButton, 2500);
-    setTimeout(injectSearchResultButtons, 3000);
+    // Try injecting at multiple intervals (LinkedIn loads content lazily)
+    setTimeout(injectButton, 1500);
+    setTimeout(injectButton, 3000);
+    setTimeout(injectButton, 5000);
+    setTimeout(injectButton, 8000);
 
-    // Watch for SPA navigation
     startObserving();
 
-    // Re-scan URL changes
-    let lastUrl = window.location.href;
+    // Watch URL changes
+    lastUrl = location.href;
     setInterval(() => {
-      if (window.location.href !== lastUrl) {
-        lastUrl = window.location.href;
-        // Remove old button when navigating away
+      if (location.href !== lastUrl) {
+        lastUrl = location.href;
         document.querySelectorAll('.' + WRAPPER_CLASS).forEach(w => w.remove());
-        if (currentPanel) {
-          currentPanel.remove();
-          currentPanel = null;
-        }
-
-        setTimeout(injectOutreachButton, 2000);
-        setTimeout(injectSearchResultButtons, 2500);
+        if (currentPanel) { currentPanel.remove(); currentPanel = null; }
+        setTimeout(injectButton, 2000);
+        setTimeout(injectButton, 4000);
       }
     }, 1000);
   }

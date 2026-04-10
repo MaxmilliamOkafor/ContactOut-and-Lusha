@@ -176,7 +176,7 @@
     "*://*/*"
   ],
   "background": {
-    "service_worker": "/app/background_wrapper.js",
+    "service_worker": "/app/background.js",
     "type": "module"
   },
   "web_accessible_resources": [
