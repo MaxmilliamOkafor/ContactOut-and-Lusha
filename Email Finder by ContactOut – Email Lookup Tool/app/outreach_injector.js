@@ -765,13 +765,168 @@
     setTimeout(() => toast.remove(), 3000);
   }
 
+  /**
+   * Get the top profile card - the card that contains the profile name (h1).
+   * This is critical to scope button searches so we don't accidentally
+   * click Connect/Message on "People you may know" suggestions.
+   */
+  function getTopProfileCard() {
+    const mainContent = document.querySelector('.scaffold-layout__main, main') || document.body;
+
+    // Strategy 1: Find the artdeco-card that contains the h1 (profile name)
+    const h1 = mainContent.querySelector('h1');
+    if (h1) {
+      let card = h1.closest('.artdeco-card, .pv-top-card, section');
+      if (card && isInMainContent(card)) return card;
+      // Also try going up a few levels
+      let parent = h1.parentElement;
+      for (let i = 0; i < 8; i++) {
+        if (!parent) break;
+        if (parent.classList && (
+          parent.classList.contains('artdeco-card') ||
+          parent.classList.contains('pv-top-card') ||
+          parent.classList.contains('pvs-header-actions__container')
+        )) return parent;
+        parent = parent.parentElement;
+      }
+    }
+
+    // Strategy 2: Find the first artdeco-card in main (usually the profile card)
+    const firstCard = mainContent.querySelector('.artdeco-card');
+    if (firstCard && isInMainContent(firstCard)) return firstCard;
+
+    // Strategy 3: Fall back to main content itself, but NOT the whole document
+    return mainContent;
+  }
+
+  /**
+   * Find a profile action button ONLY within the top profile card.
+   * This prevents accidentally clicking buttons in "People you may know" etc.
+   */
+  function findProfileButton(textMatches, selectors) {
+    const profileCard = getTopProfileCard();
+    console.log('[OutreachPro] Searching for button in profile card:', profileCard?.className);
+
+    // Strategy 1: Try selectors within the profile card
+    for (const sel of selectors) {
+      const btns = profileCard.querySelectorAll(sel);
+      for (const btn of btns) {
+        // Double-check: make sure this button is NOT inside a "People also viewed" or "People you may know" section
+        if (isInsideRecommendationSection(btn)) continue;
+        console.log('[OutreachPro] Found profile button via selector:', sel, btn.textContent.trim());
+        return btn;
+      }
+    }
+
+    // Strategy 2: Try by text content, but ONLY first matching button in profile card
+    const allButtons = profileCard.querySelectorAll('button, a[role="button"]');
+    for (const btn of allButtons) {
+      if (isInsideRecommendationSection(btn)) continue;
+      const text = btn.textContent.trim().toLowerCase();
+      for (const match of textMatches) {
+        if (text === match.toLowerCase() || text.includes(match.toLowerCase())) {
+          console.log('[OutreachPro] Found profile button via text:', text);
+          return btn;
+        }
+      }
+    }
+
+    console.log('[OutreachPro] Profile button not found in card, trying action bar...');
+
+    // Strategy 3: Try within the OutreachPro wrapper's parent (the action bar where we injected)
+    const wrapper = document.querySelector('.' + WRAPPER_CLASS);
+    if (wrapper && wrapper.parentElement) {
+      const actionBar = wrapper.parentElement;
+      const btns = actionBar.querySelectorAll('button, a[role="button"]');
+      for (const btn of btns) {
+        if (btn.classList.contains(BUTTON_CLASS)) continue; // skip our own button
+        const text = btn.textContent.trim().toLowerCase();
+        for (const match of textMatches) {
+          if (text === match.toLowerCase() || text.includes(match.toLowerCase())) {
+            console.log('[OutreachPro] Found button in action bar:', text);
+            return btn;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Check if a button is inside a recommendation section like
+   * "People you may know", "People also viewed", etc.
+   */
+  function isInsideRecommendationSection(el) {
+    let node = el;
+    while (node) {
+      // Check for common recommendation section markers
+      if (node.getAttribute && node.getAttribute('data-view-name') === 'profile-browsemap') return true;
+      if (node.classList) {
+        const cls = node.className.toLowerCase();
+        if (cls.includes('browsemap') ||
+            cls.includes('pymk') ||
+            cls.includes('people-also') ||
+            cls.includes('similar-profiles') ||
+            cls.includes('aside')) return true;
+      }
+      // Check section headings for "People" text
+      if (node.tagName === 'SECTION') {
+        const heading = node.querySelector('h2, h3, .t-20');
+        if (heading) {
+          const headingText = heading.textContent.toLowerCase();
+          if (headingText.includes('people') ||
+              headingText.includes('also viewed') ||
+              headingText.includes('similar') ||
+              headingText.includes('may know')) {
+            return true;
+          }
+        }
+      }
+      if (node.tagName === 'ASIDE') return true;
+      node = node.parentElement;
+    }
+    return false;
+  }
+
+  /**
+   * Find a button in the MODAL/DIALOG (document-wide) - used for "Add a note", etc.
+   * These appear as overlays outside the main content.
+   */
+  function findModalButton(textMatches, selectors) {
+    // Look in artdeco-modal or dialog elements first
+    const modals = document.querySelectorAll('.artdeco-modal, [role="dialog"], .send-invite');
+    for (const modal of modals) {
+      for (const sel of selectors) {
+        const btn = modal.querySelector(sel);
+        if (btn) return btn;
+      }
+      const btns = modal.querySelectorAll('button');
+      for (const btn of btns) {
+        const text = btn.textContent.trim().toLowerCase();
+        for (const match of textMatches) {
+          if (text === match.toLowerCase() || text.includes(match.toLowerCase())) {
+            return btn;
+          }
+        }
+      }
+    }
+
+    // Fall back to document-wide for selectors
+    for (const sel of selectors) {
+      const btn = document.querySelector(sel);
+      if (btn) return btn;
+    }
+
+    return null;
+  }
+
   function insertConnectionRequest(text) {
-    // Find the Connect button on the profile using multiple strategies
-    const connectBtn = findButton(['Connect', 'connect'], [
+    // Find the Connect button ONLY in the top profile card (NOT in "People you may know")
+    const connectBtn = findProfileButton(['Connect'], [
       'button[aria-label*="connect" i]',
       'button[aria-label*="Connect"]',
       'button[aria-label*="Invite"]',
-      'button[aria-label*="invite"]',
     ]);
 
     if (!connectBtn) {
@@ -780,23 +935,30 @@
       return;
     }
 
+    console.log('[OutreachPro] Clicking Connect button:', connectBtn.textContent.trim());
     connectBtn.click();
 
-    // Wait for the Connect modal to appear
+    // Wait for the Connect modal/dialog to appear
     retryUntil(() => {
-      // Look for "Add a note" button in the connect modal
-      const addNoteBtn = findButton(['Add a note', 'add a note'], [
+      // The "Add a note" button appears in a MODAL overlay, not in the profile card
+      return findModalButton(['Add a note'], [
         'button[aria-label*="Add a note"]',
         'button[aria-label*="add a note"]',
-        'button.artdeco-button--secondary',
       ]);
-      return addNoteBtn;
     }, 3000, 300).then(addNoteBtn => {
       if (addNoteBtn) {
         addNoteBtn.click();
-        // Wait for textarea to appear
+        // Wait for textarea to appear (in the modal)
         retryUntil(() => {
-          return document.querySelector('textarea[name="message"], textarea#custom-message, .send-invite__custom-message, textarea.connect-button-send-invite__custom-message');
+          return document.querySelector(
+            '.artdeco-modal textarea, ' +
+            '[role="dialog"] textarea, ' +
+            '.send-invite textarea, ' +
+            'textarea[name="message"], ' +
+            'textarea#custom-message, ' +
+            '.send-invite__custom-message, ' +
+            'textarea.connect-button-send-invite__custom-message'
+          );
         }, 2000, 200).then(ta => {
           if (ta) {
             setNativeValue(ta, text);
@@ -815,8 +977,8 @@
   }
 
   function insertDirectMessage(text) {
-    // Find the Message button
-    const msgBtn = findButton(['Message', 'message'], [
+    // Find the Message button ONLY in the top profile card
+    const msgBtn = findProfileButton(['Message'], [
       'button[aria-label*="Message"]',
       'button[aria-label*="message"]',
       'a[aria-label*="Message"]',
@@ -829,6 +991,7 @@
       return;
     }
 
+    console.log('[OutreachPro] Clicking Message button:', msgBtn.textContent.trim());
     msgBtn.click();
 
     // Wait for the message box to appear
@@ -863,39 +1026,6 @@
         showToast('Message copied to clipboard. Paste it in the message box.', 'success');
       }
     });
-  }
-
-  // Helper: Find a button by text content or selectors
-  function findButton(textMatches, selectors) {
-    const mainContent = document.querySelector('.scaffold-layout__main, main') || document.body;
-
-    // Try selectors first
-    for (const sel of selectors) {
-      const btns = mainContent.querySelectorAll(sel);
-      for (const btn of btns) {
-        if (isInMainContent(btn)) return btn;
-      }
-    }
-
-    // Try by text content
-    const allButtons = mainContent.querySelectorAll('button, a[role="button"]');
-    for (const btn of allButtons) {
-      if (!isInMainContent(btn)) continue;
-      const text = btn.textContent.trim().toLowerCase();
-      for (const match of textMatches) {
-        if (text === match.toLowerCase() || text.includes(match.toLowerCase())) {
-          return btn;
-        }
-      }
-    }
-
-    // Try document-wide as last resort (for modals that are outside main)
-    for (const sel of selectors) {
-      const btn = document.querySelector(sel);
-      if (btn) return btn;
-    }
-
-    return null;
   }
 
   // Helper: Retry until an element is found or timeout
