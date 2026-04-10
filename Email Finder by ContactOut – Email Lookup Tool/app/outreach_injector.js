@@ -296,26 +296,52 @@
   }
 
   // ===================================================================
-  // 2. Profile Data Scraping (IMPROVED selectors)
+  // 2. Profile Data Scraping (IMPROVED with multiple fallbacks)
   // ===================================================================
   function scrapeProfile() {
-    const d = { name: '', headline: '', company: '', location: '', about: '', profileUrl: location.href };
+    const d = { name: '', headline: '', company: '', location: '', about: '', profileUrl: location.href, email: '' };
 
-    // Name - try multiple selectors (LinkedIn frequently changes these)
+    // Scope to main content to avoid picking up sidebar names
+    const mainContent = document.querySelector('.scaffold-layout__main, main') || document.body;
+
+    // Name - try multiple selectors within main content
     const nameSelectors = [
       'h1.text-heading-xlarge',
       '.text-heading-xlarge',
       '.pv-text-details__left-panel h1',
       '.ph5 h1',
-      'section.artdeco-card h1',
       'h1[tabindex="-1"]',
-      'h1',
     ];
     for (const sel of nameSelectors) {
-      const el = document.querySelector(sel);
+      const el = mainContent.querySelector(sel);
       if (el && el.textContent.trim() && el.textContent.trim().length < 80) {
         d.name = el.textContent.trim();
         break;
+      }
+    }
+
+    // Fallback: try ANY h1 in main content
+    if (!d.name) {
+      const h1 = mainContent.querySelector('h1');
+      if (h1 && h1.textContent.trim().length < 80 && h1.textContent.trim().length > 1) {
+        d.name = h1.textContent.trim();
+      }
+    }
+
+    // Fallback: extract from page title (e.g. "Bill Gates - Chair, Gates Foundation | LinkedIn")
+    if (!d.name) {
+      const title = document.title || '';
+      const titleMatch = title.match(/^(.+?)\s*[-|]/);
+      if (titleMatch && titleMatch[1].trim().length > 1 && titleMatch[1].trim().length < 60) {
+        d.name = titleMatch[1].trim();
+      }
+    }
+
+    // Fallback: extract from URL slug (e.g. /in/bill-gates/)
+    if (!d.name && location.pathname.startsWith('/in/')) {
+      const slug = location.pathname.replace('/in/', '').replace(/\/$/, '');
+      if (slug && slug.length > 1) {
+        d.name = slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
       }
     }
 
@@ -327,7 +353,7 @@
       '.ph5 .text-body-medium',
     ];
     for (const sel of hlSelectors) {
-      const el = document.querySelector(sel);
+      const el = mainContent.querySelector(sel);
       if (el && el.textContent.trim()) {
         d.headline = el.textContent.trim();
         break;
@@ -340,7 +366,7 @@
 
     // Also try to get company from experience section
     if (!d.company) {
-      const expCompany = document.querySelector('.pv-text-details__right-panel .inline-show-more-text');
+      const expCompany = mainContent.querySelector('.pv-text-details__right-panel .inline-show-more-text');
       if (expCompany) d.company = expCompany.textContent.trim();
     }
 
@@ -351,7 +377,7 @@
       'span.text-body-small.inline',
     ];
     for (const sel of locSelectors) {
-      const el = document.querySelector(sel);
+      const el = mainContent.querySelector(sel);
       if (el && el.textContent.trim()) {
         d.location = el.textContent.trim();
         break;
@@ -368,7 +394,13 @@
       }
     }
 
-    console.log('[OutreachPro] Scraped profile:', d.name, '|', d.headline);
+    // Try to grab email from ContactOut sidebar if visible
+    const emailEl = document.querySelector('[data-email], .contactout-email, a[href^="mailto:"]');
+    if (emailEl) {
+      d.email = emailEl.getAttribute('data-email') || emailEl.getAttribute('href')?.replace('mailto:', '') || emailEl.textContent.trim();
+    }
+
+    console.log('[OutreachPro] Scraped profile:', d.name, '|', d.headline, '|', d.email);
     return d;
   }
 
@@ -570,10 +602,14 @@
         <div style="display:flex;gap:6px;">
           <button class="op-sec-btn" id="op-copy" style="display:none;">📋 Copy</button>
           <button class="op-insert-btn" id="op-insert" style="display:none;">➤ Insert</button>
+          <button class="op-insert-btn" id="op-send-email" style="display:none;background:#EA4335;">📧 Send Email</button>
         </div>
       </div>
       <div class="op-cv-prompt" id="op-cv-prompt">
-        <span>📄</span><span><a id="op-cv-link">Upload your CV</a> for better personalization</span>
+        <span style="display:flex;gap:16px;align-items:center;width:100%;">
+          <span style="display:flex;align-items:center;gap:6px;">📄 <a id="op-cv-link">Upload CV</a></span>
+          <span style="display:flex;align-items:center;gap:6px;">⚙️ <a id="op-settings-link">Settings & Signature</a></span>
+        </span>
       </div>
       <div class="op-footer">Powered by <span class="op-hl">OutreachPro</span> - <span class="op-hl">&infin; Unlimited</span> messages</div>
     `;
@@ -658,6 +694,8 @@
       };
     });
 
+    const sendEmailBtn = panel.querySelector('#op-send-email');
+
     // Generate
     function doGenerate() {
       genBtn.innerHTML = '⏳ Writing...';
@@ -666,6 +704,7 @@
       charcount.style.display = 'none';
       copyBtn.style.display = 'none';
       insertBtn.style.display = 'none';
+      sendEmailBtn.style.display = 'none';
 
       setTimeout(() => {
         const result = window.OutreachMessageGenerator.generate(type, profile, cv, tone);
@@ -673,9 +712,19 @@
         textarea.style.display = 'block';
         skel.style.display = 'none';
         copyBtn.style.display = 'inline-flex';
+
+        // Show Insert for connection/DM, Send Email for email tab
         if (type === 'connection_request' || type === 'direct_message') {
           insertBtn.style.display = 'inline-flex';
+          sendEmailBtn.style.display = 'none';
+        } else if (type === 'email') {
+          insertBtn.style.display = 'none';
+          sendEmailBtn.style.display = 'inline-flex';
+        } else {
+          insertBtn.style.display = 'none';
+          sendEmailBtn.style.display = 'none';
         }
+
         if (result.charCount !== undefined) {
           charcount.style.display = 'block';
           charcount.textContent = result.charCount + ' / ' + (result.limit || 300) + ' characters';
@@ -712,7 +761,7 @@
       });
     };
 
-    // Insert into LinkedIn (FIXED - updated selectors + retry logic)
+    // Insert into LinkedIn (connection/DM)
     insertBtn.onclick = () => {
       if (type === 'connection_request') {
         insertConnectionRequest(textarea.value);
@@ -721,30 +770,44 @@
       }
     };
 
+    // Send Email - opens default email client or Gmail with pre-filled content
+    sendEmailBtn.onclick = () => {
+      const msgText = textarea.value;
+      // Extract subject line if present
+      let subject = '';
+      let body = msgText;
+      const subjectMatch = msgText.match(/^Subject:\s*(.+?)\n/);
+      if (subjectMatch) {
+        subject = subjectMatch[1].trim();
+        body = msgText.replace(/^Subject:\s*.+?\n\n?/, '').trim();
+      }
+
+      // Try to get recipient email from ContactOut or scraped data
+      const recipientEmail = profile.email || '';
+
+      // Ask user how they want to send
+      openEmailSendModal(panel, recipientEmail, subject, body);
+    };
+
     // CV upload link
     const cvLink = panel.querySelector('#op-cv-link');
     if (cvLink) {
       cvLink.onclick = (e) => {
         e.preventDefault();
         openCVModal(panel, (updatedCV) => {
-          // Update the local cv variable after save
           cv = updatedCV;
-          // Update the prompt text
-          const prompt = panel.querySelector('#op-cv-prompt');
-          if (prompt && cv.cvFileName) {
-            prompt.innerHTML = `<span>📄</span><span>CV loaded: <strong>${esc(cv.cvFileName)}</strong> <a id="op-cv-link" style="margin-left:6px;">Change</a></span>`;
-            // Re-attach click handler
-            const newLink = prompt.querySelector('#op-cv-link');
-            if (newLink) {
-              newLink.onclick = (e2) => {
-                e2.preventDefault();
-                openCVModal(panel, (updated) => { cv = updated; });
-              };
-            }
-          } else if (prompt) {
-            prompt.style.display = 'none';
-          }
-          // Auto-regenerate with new CV data
+          doGenerate();
+        });
+      };
+    }
+
+    // Settings link
+    const settingsLink = panel.querySelector('#op-settings-link');
+    if (settingsLink) {
+      settingsLink.onclick = (e) => {
+        e.preventDefault();
+        openSettingsModal(panel, cv, (updatedCV) => {
+          cv = updatedCV;
           doGenerate();
         });
       };
@@ -922,7 +985,7 @@
   }
 
   function insertConnectionRequest(text) {
-    // Find the Connect button ONLY in the top profile card (NOT in "People you may know")
+    // Find the Connect button ONLY in the top profile card
     const connectBtn = findProfileButton(['Connect'], [
       'button[aria-label*="connect" i]',
       'button[aria-label*="Connect"]',
@@ -930,50 +993,136 @@
     ]);
 
     if (!connectBtn) {
-      showToast('Could not find the Connect button. Try clicking it manually, then paste the message.', 'error');
+      showToast('Connect button not found. Try clicking Connect manually.', 'error');
       navigator.clipboard.writeText(text);
       return;
     }
 
-    console.log('[OutreachPro] Clicking Connect button:', connectBtn.textContent.trim());
+    showToast('Sending connection request...', '');
+    console.log('[OutreachPro] Clicking Connect:', connectBtn.textContent.trim());
     connectBtn.click();
 
-    // Wait for the Connect modal/dialog to appear
+    // Wait for ANY modal/dialog to appear after clicking Connect
     retryUntil(() => {
-      // The "Add a note" button appears in a MODAL overlay, not in the profile card
-      return findModalButton(['Add a note'], [
-        'button[aria-label*="Add a note"]',
-        'button[aria-label*="add a note"]',
-      ]);
-    }, 3000, 300).then(addNoteBtn => {
-      if (addNoteBtn) {
-        addNoteBtn.click();
-        // Wait for textarea to appear (in the modal)
-        retryUntil(() => {
-          return document.querySelector(
-            '.artdeco-modal textarea, ' +
-            '[role="dialog"] textarea, ' +
-            '.send-invite textarea, ' +
-            'textarea[name="message"], ' +
-            'textarea#custom-message, ' +
-            '.send-invite__custom-message, ' +
-            'textarea.connect-button-send-invite__custom-message'
-          );
-        }, 2000, 200).then(ta => {
+      // Look for the connect modal by multiple strategies
+      const modal = document.querySelector('.artdeco-modal, [role="dialog"], .send-invite, .artdeco-modal__content');
+      return modal;
+    }, 5000, 200).then(modal => {
+      if (!modal) {
+        navigator.clipboard.writeText(text);
+        showToast('Connection modal did not appear. Message copied to clipboard.', 'error');
+        return;
+      }
+
+      console.log('[OutreachPro] Modal found:', modal.className);
+
+      // Find the "Add a note" button inside the modal - try many selectors
+      retryUntil(() => {
+        // Search by aria-label
+        let btn = modal.querySelector('button[aria-label*="Add a note"], button[aria-label*="add a note"]');
+        if (btn) return btn;
+
+        // Search by button text content
+        const allBtns = modal.querySelectorAll('button');
+        for (const b of allBtns) {
+          const txt = b.textContent.trim().toLowerCase();
+          if (txt.includes('add a note') || txt.includes('add note')) return b;
+        }
+
+        // If there's a secondary button (LinkedIn's "Add a note" is usually the secondary)
+        btn = modal.querySelector('button.artdeco-button--secondary');
+        if (btn && btn.textContent.toLowerCase().includes('note')) return btn;
+
+        // Try any secondary button in the modal
+        const secondaryBtns = modal.querySelectorAll('button.artdeco-button--secondary, button.artdeco-button--muted');
+        for (const b of secondaryBtns) {
+          if (!b.textContent.toLowerCase().includes('send')) return b;
+        }
+
+        return null;
+      }, 3000, 200).then(addNoteBtn => {
+        if (addNoteBtn) {
+          console.log('[OutreachPro] Clicking Add a note:', addNoteBtn.textContent.trim());
+          addNoteBtn.click();
+
+          // Wait for textarea to appear in the modal
+          retryUntil(() => {
+            return document.querySelector(
+              '.artdeco-modal textarea, ' +
+              '[role="dialog"] textarea, ' +
+              '.send-invite textarea, ' +
+              'textarea[name="message"], ' +
+              'textarea#custom-message, ' +
+              '.send-invite__custom-message, ' +
+              'textarea.connect-button-send-invite__custom-message, ' +
+              '.artdeco-modal__content textarea'
+            );
+          }, 3000, 200).then(ta => {
+            if (ta) {
+              setNativeValue(ta, text);
+              console.log('[OutreachPro] Message filled in textarea');
+
+              // NOW auto-click the Send button to complete the flow
+              setTimeout(() => {
+                const sendBtn = findSendButtonInModal();
+                if (sendBtn) {
+                  console.log('[OutreachPro] Auto-clicking Send:', sendBtn.textContent.trim());
+                  sendBtn.click();
+                  showToast('Connection request sent with your message!', 'success');
+                } else {
+                  showToast('Message filled! Click Send to complete.', 'success');
+                }
+              }, 500);
+            } else {
+              navigator.clipboard.writeText(text);
+              showToast('Message copied. Paste it in the note field and click Send.', 'success');
+            }
+          });
+        } else {
+          // No "Add a note" - maybe it's a direct send modal
+          // Try to find a textarea directly
+          const ta = modal.querySelector('textarea');
           if (ta) {
             setNativeValue(ta, text);
-            showToast('Message inserted! Click Send to finish.', 'success');
+            setTimeout(() => {
+              const sendBtn = findSendButtonInModal();
+              if (sendBtn) { sendBtn.click(); showToast('Connection request sent!', 'success'); }
+              else { showToast('Message filled! Click Send.', 'success'); }
+            }, 500);
           } else {
             navigator.clipboard.writeText(text);
-            showToast('Message copied to clipboard. Paste it in the note field.', 'success');
+            showToast('Message copied to clipboard. Add a note and paste.', 'success');
           }
-        });
-      } else {
-        // Maybe the modal didn't pop up, or it went straight to "Pending"
-        navigator.clipboard.writeText(text);
-        showToast('Message copied to clipboard. Add a note and paste it.', 'success');
-      }
+        }
+      });
     });
+  }
+
+  /**
+   * Find the Send/Submit button inside the currently open modal
+   */
+  function findSendButtonInModal() {
+    const modals = document.querySelectorAll('.artdeco-modal, [role="dialog"], .send-invite');
+    for (const modal of modals) {
+      // Try aria-label
+      let btn = modal.querySelector('button[aria-label*="Send"], button[aria-label*="send"]');
+      if (btn) return btn;
+
+      // Try primary button with "Send" text
+      const allBtns = modal.querySelectorAll('button');
+      for (const b of allBtns) {
+        const txt = b.textContent.trim().toLowerCase();
+        if (txt === 'send' || txt === 'send invitation' || txt === 'send now' || txt.includes('send')) {
+          // Make sure it's not "Send without a note" unless that's all we have
+          if (txt === 'send' || txt === 'send invitation' || txt === 'send now') return b;
+        }
+      }
+
+      // Fallback: primary button
+      btn = modal.querySelector('button.artdeco-button--primary');
+      if (btn) return btn;
+    }
+    return null;
   }
 
   function insertDirectMessage(text) {
@@ -987,11 +1136,12 @@
 
     if (!msgBtn) {
       navigator.clipboard.writeText(text);
-      showToast('Message copied to clipboard. Open the message window and paste it.', 'success');
+      showToast('Message copied to clipboard. Open messaging and paste it.', 'success');
       return;
     }
 
-    console.log('[OutreachPro] Clicking Message button:', msgBtn.textContent.trim());
+    showToast('Opening message window...', '');
+    console.log('[OutreachPro] Clicking Message:', msgBtn.textContent.trim());
     msgBtn.click();
 
     // Wait for the message box to appear
@@ -1002,10 +1152,9 @@
         '.msg-form__msg-content-container div[contenteditable="true"], ' +
         'div.msg-form__contenteditable[contenteditable="true"]'
       );
-    }, 3000, 300).then(box => {
+    }, 5000, 300).then(box => {
       if (box) {
         box.focus();
-        // Clear existing content
         box.innerHTML = '';
         // Insert text as paragraphs
         const paragraphs = text.split('\n').filter(l => l.trim());
@@ -1014,13 +1163,27 @@
           pEl.textContent = p;
           box.appendChild(pEl);
         });
-        // Trigger input event for LinkedIn's React to pick up
+        // Trigger events for LinkedIn's React
         box.dispatchEvent(new Event('input', { bubbles: true }));
         box.dispatchEvent(new Event('change', { bubbles: true }));
-        // Also try KeyboardEvent
         box.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: ' ' }));
         box.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: ' ' }));
-        showToast('Message inserted! Review and send.', 'success');
+
+        // Auto-click the Send button in the message form
+        setTimeout(() => {
+          const sendBtn = document.querySelector(
+            '.msg-form__send-button, ' +
+            'button.msg-form__send-btn, ' +
+            'button[type="submit"].msg-form__send-button, ' +
+            '.msg-form__footer button.artdeco-button--primary'
+          );
+          if (sendBtn && !sendBtn.disabled) {
+            sendBtn.click();
+            showToast('Message sent!', 'success');
+          } else {
+            showToast('Message filled! Click the Send button to deliver.', 'success');
+          }
+        }, 800);
       } else {
         navigator.clipboard.writeText(text);
         showToast('Message copied to clipboard. Paste it in the message box.', 'success');
@@ -1228,7 +1391,143 @@
   }
 
   // ===================================================================
-  // 9. Utilities
+  // 9. Settings Modal (Name + Signature editing from the panel)
+  // ===================================================================
+  function openSettingsModal(parentPanel, currentCV, onSaveCallback) {
+    const modal = document.createElement('div');
+    modal.className = 'op-cv-modal';
+    modal.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,0.98);z-index:10;padding:20px;overflow-y:auto;font-family:Inter,sans-serif;border-radius:16px;display:flex;flex-direction:column;';
+    modal.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h3 style="font-size:16px;font-weight:700;margin:0">\u2699\ufe0f Settings & Signature</h3>
+        <button id="settings-close" style="background:#f0f0f5;border:none;width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:16px">&times;</button>
+      </div>
+      <p style="font-size:12px;color:#888;margin-bottom:16px">Set your name and signature. Your signature will appear at the end of every generated message.</p>
+
+      <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Your Name</label>
+        <input type="text" id="settings-name" placeholder="Maxmilliam" style="width:100%;padding:10px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:13px;font-family:inherit;outline:none;box-sizing:border-box" /></div>
+
+      <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Email Signature</label>
+        <textarea id="settings-signature" placeholder="Best regards,&#10;Maxmilliam" rows="3" style="width:100%;padding:10px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:12px;font-family:inherit;resize:vertical;outline:none;box-sizing:border-box"></textarea>
+        <p style="font-size:10px;color:#bbb;margin-top:4px">This appears at the bottom of every message. Example:<br><em>Best regards,<br>Maxmilliam</em></p></div>
+
+      <button id="settings-save" style="width:100%;padding:12px;font-size:14px;font-weight:600;background:linear-gradient(135deg,#F59E0B,#F97316,#EF4444);color:#fff;border:none;border-radius:10px;cursor:pointer;font-family:inherit;box-shadow:0 3px 12px rgba(249,115,22,0.3)">\ud83d\udcbe Save Settings</button>
+      <p style="font-size:10px;color:#bbb;text-align:center;margin-top:10px">Changes apply immediately to all new messages.</p>
+    `;
+    parentPanel.appendChild(modal);
+
+    // Load existing values
+    const nameInput = modal.querySelector('#settings-name');
+    const sigInput = modal.querySelector('#settings-signature');
+    if (currentCV.name) nameInput.value = currentCV.name;
+    if (currentCV.signature) sigInput.value = currentCV.signature;
+
+    modal.querySelector('#settings-close').onclick = () => modal.remove();
+    modal.querySelector('#settings-save').onclick = () => {
+      const newName = nameInput.value.trim();
+      const newSig = sigInput.value.trim();
+
+      chrome.storage.local.get('outreach_pro_user_cv', (r) => {
+        const existing = r.outreach_pro_user_cv || {};
+        const updated = {
+          ...existing,
+          name: newName || existing.name || '',
+          signature: newSig,
+          lastUpdated: new Date().toISOString(),
+        };
+        chrome.storage.local.set({ outreach_pro_user_cv: updated }, () => {
+          const btn = modal.querySelector('#settings-save');
+          btn.textContent = '\u2705 Saved!';
+          btn.style.background = '#10B981';
+          if (onSaveCallback) onSaveCallback(updated);
+          setTimeout(() => modal.remove(), 800);
+        });
+      });
+    };
+  }
+
+  // ===================================================================
+  // 10. Email Send Modal (Gmail, Yahoo, Outlook, default)
+  // ===================================================================
+  function openEmailSendModal(parentPanel, recipientEmail, subject, body) {
+    const modal = document.createElement('div');
+    modal.className = 'op-cv-modal';
+    modal.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,0.98);z-index:10;padding:20px;overflow-y:auto;font-family:Inter,sans-serif;border-radius:16px;display:flex;flex-direction:column;';
+    modal.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h3 style="font-size:16px;font-weight:700;margin:0">\ud83d\udce7 Send Email</h3>
+        <button id="email-close" style="background:#f0f0f5;border:none;width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:16px">&times;</button>
+      </div>
+
+      <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Recipient Email</label>
+        <input type="email" id="email-to" value="${esc(recipientEmail)}" placeholder="recipient@email.com" style="width:100%;padding:10px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:13px;font-family:inherit;outline:none;box-sizing:border-box" /></div>
+
+      <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Subject</label>
+        <input type="text" id="email-subject" value="${esc(subject)}" style="width:100%;padding:10px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:13px;font-family:inherit;outline:none;box-sizing:border-box" /></div>
+
+      <p style="font-size:11px;color:#888;margin-bottom:12px">Choose your email provider to open a compose window:</p>
+
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <button class="email-provider-btn" data-provider="gmail" style="display:flex;align-items:center;gap:10px;padding:12px 16px;border:1.5px solid #e0e0e5;border-radius:10px;background:#fff;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;transition:all 0.2s">
+          <span style="font-size:18px">\ud83d\udce8</span> <span>Open in Gmail</span>
+          <span style="margin-left:auto;font-size:10px;color:#888">gmail.com</span>
+        </button>
+        <button class="email-provider-btn" data-provider="outlook" style="display:flex;align-items:center;gap:10px;padding:12px 16px;border:1.5px solid #e0e0e5;border-radius:10px;background:#fff;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;transition:all 0.2s">
+          <span style="font-size:18px">\ud83d\udceb</span> <span>Open in Outlook</span>
+          <span style="margin-left:auto;font-size:10px;color:#888">outlook.com</span>
+        </button>
+        <button class="email-provider-btn" data-provider="yahoo" style="display:flex;align-items:center;gap:10px;padding:12px 16px;border:1.5px solid #e0e0e5;border-radius:10px;background:#fff;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;transition:all 0.2s">
+          <span style="font-size:18px">\ud83d\udce9</span> <span>Open in Yahoo Mail</span>
+          <span style="margin-left:auto;font-size:10px;color:#888">mail.yahoo.com</span>
+        </button>
+        <button class="email-provider-btn" data-provider="default" style="display:flex;align-items:center;gap:10px;padding:12px 16px;border:1.5px solid #e0e0e5;border-radius:10px;background:#fff;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;transition:all 0.2s">
+          <span style="font-size:18px">\u2709\ufe0f</span> <span>Default Email App</span>
+          <span style="margin-left:auto;font-size:10px;color:#888">mailto:</span>
+        </button>
+      </div>
+
+      <p style="font-size:10px;color:#bbb;text-align:center;margin-top:14px">Your message will be pre-filled in the compose window.</p>
+    `;
+    parentPanel.appendChild(modal);
+
+    modal.querySelector('#email-close').onclick = () => modal.remove();
+
+    // Provider click handlers
+    modal.querySelectorAll('.email-provider-btn').forEach(btn => {
+      btn.onmouseover = () => { btn.style.borderColor = '#F97316'; btn.style.background = 'rgba(249,115,22,0.04)'; };
+      btn.onmouseout = () => { btn.style.borderColor = '#e0e0e5'; btn.style.background = '#fff'; };
+      btn.onclick = () => {
+        const provider = btn.dataset.provider;
+        const to = modal.querySelector('#email-to').value.trim();
+        const subj = encodeURIComponent(modal.querySelector('#email-subject').value.trim());
+        const bodyEnc = encodeURIComponent(body);
+
+        let url = '';
+        switch (provider) {
+          case 'gmail':
+            url = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${subj}&body=${bodyEnc}`;
+            break;
+          case 'outlook':
+            url = `https://outlook.live.com/mail/0/deeplink/compose?to=${encodeURIComponent(to)}&subject=${subj}&body=${bodyEnc}`;
+            break;
+          case 'yahoo':
+            url = `https://compose.mail.yahoo.com/?to=${encodeURIComponent(to)}&subject=${subj}&body=${bodyEnc}`;
+            break;
+          case 'default':
+          default:
+            url = `mailto:${encodeURIComponent(to)}?subject=${subj}&body=${bodyEnc}`;
+            break;
+        }
+
+        window.open(url, '_blank');
+        showToast('Email compose opened!', 'success');
+        modal.remove();
+      };
+    });
+  }
+
+  // ===================================================================
+  // 11. Utilities
   // ===================================================================
   function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
