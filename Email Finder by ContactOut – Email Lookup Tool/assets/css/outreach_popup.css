@@ -449,6 +449,25 @@ body::-webkit-scrollbar-thumb {
   color: #EF4444;
 }
 
+/* ── CV File Upload ── */
+.cv-drop-zone {
+  border: 2px dashed rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 24px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.25s ease;
+}
+
+.cv-drop-zone:hover {
+  border-color: rgba(249, 115, 22, 0.4);
+  background: rgba(249, 115, 22, 0.04);
+}
+
+.cv-file-area {
+  margin-bottom: 4px;
+}
+
 /* ── Footer ── */
 .popup-footer {
   padding: 12px;

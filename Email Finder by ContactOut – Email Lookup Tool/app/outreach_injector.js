@@ -1,10 +1,10 @@
 /**
- * OutreachPro — LinkedIn Profile Outreach Injector
+ * OutreachPro - LinkedIn Profile Outreach Injector
  *
  * Injects a prominent "Connect with AI message" button beside LinkedIn's
  * native action buttons (Message, Follow, More).
  *
- * Zero limitations — no tokens, coins, or API limits.
+ * Zero limitations - no tokens, coins, or API limits.
  */
 (function () {
   'use strict';
@@ -16,9 +16,9 @@
   let observer = null;
   let lastUrl = '';
 
-  // ═══════════════════════════════════════════════════════════════
-  // 1. Inject Styles (inline — no external CSS dependency)
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
+  // 1. Inject Styles (inline - no external CSS dependency)
+  // ===================================================================
   function injectStyles() {
     if (document.getElementById('outreach-pro-injected-css')) return;
     const style = document.createElement('style');
@@ -123,6 +123,13 @@
       .theme--dark .op-sec-btn, html[data-color-theme="dark"] .op-sec-btn { background: #2a2a3e; border-color: rgba(255,255,255,0.1); color: #ccc; }
       .theme--dark .op-footer, html[data-color-theme="dark"] .op-footer { background: #16161e; border-color: rgba(255,255,255,0.06); }
       .theme--dark .op-cv-prompt, html[data-color-theme="dark"] .op-cv-prompt { background: rgba(249,115,22,0.06); border-color: rgba(255,255,255,0.06); }
+      .theme--dark .op-cv-modal, html[data-color-theme="dark"] .op-cv-modal {
+        background: #1e1e2e !important; color: #e0e0e8 !important;
+      }
+      .theme--dark .op-cv-modal input, .theme--dark .op-cv-modal textarea,
+      html[data-color-theme="dark"] .op-cv-modal input, html[data-color-theme="dark"] .op-cv-modal textarea {
+        background: #2a2a3e !important; color: #e0e0e8 !important; border-color: rgba(255,255,255,0.12) !important;
+      }
       .op-overlay {
         position: fixed; top: 0; left: 0; right: 0; bottom: 0;
         background: rgba(0,0,0,0.4); z-index: 2147483640;
@@ -238,32 +245,118 @@
       }
       .op-skel.s { width: 60%; } .op-skel.m { width: 80%; } .op-skel.l { width: 95%; }
       @keyframes op-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+
+      /* File upload drop zone */
+      .op-drop-zone {
+        border: 2px dashed #e0e0e5;
+        border-radius: 12px;
+        padding: 24px 16px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s;
+        margin-bottom: 12px;
+      }
+      .op-drop-zone:hover, .op-drop-zone.dragover {
+        border-color: #F97316;
+        background: rgba(249,115,22,0.04);
+      }
+      .op-drop-zone .drop-icon { font-size: 28px; margin-bottom: 6px; }
+      .op-drop-zone .drop-text { font-size: 12px; color: #888; }
+      .op-drop-zone .drop-formats { font-size: 10px; color: #bbb; margin-top: 4px; }
+
+      .op-file-info {
+        display: flex; align-items: center; gap: 10px;
+        padding: 12px; background: rgba(16,185,129,0.06);
+        border: 1px solid rgba(16,185,129,0.2);
+        border-radius: 10px; margin-bottom: 12px;
+      }
+      .op-file-info .file-icon { font-size: 20px; }
+      .op-file-info .file-name { font-size: 12px; font-weight: 600; color: #10B981; flex: 1; }
+      .op-file-info .file-remove {
+        font-size: 11px; color: #EF4444; cursor: pointer; font-weight: 600;
+        background: none; border: none; font-family: inherit;
+      }
+      .op-file-info .file-remove:hover { text-decoration: underline; }
+
+      /* Toast notification */
+      .op-toast {
+        position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+        background: #1a1a2e; color: #fff; padding: 12px 24px; border-radius: 10px;
+        font-size: 13px; font-family: 'Inter', sans-serif; z-index: 2147483642;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.3); animation: op-toast-in 0.3s ease;
+      }
+      .op-toast.success { background: #10B981; }
+      .op-toast.error { background: #EF4444; }
+      @keyframes op-toast-in {
+        from { opacity: 0; transform: translateX(-50%) translateY(12px); }
+        to { opacity: 1; transform: translateX(-50%) translateY(0); }
+      }
     `;
     document.head.appendChild(style);
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 2. Profile Data Scraping
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
+  // 2. Profile Data Scraping (IMPROVED selectors)
+  // ===================================================================
   function scrapeProfile() {
     const d = { name: '', headline: '', company: '', location: '', about: '', profileUrl: location.href };
 
-    // Name — try multiple selectors
-    const nameEl = document.querySelector('h1') || document.querySelector('.text-heading-xlarge');
-    if (nameEl) d.name = nameEl.textContent.trim();
+    // Name - try multiple selectors (LinkedIn frequently changes these)
+    const nameSelectors = [
+      'h1.text-heading-xlarge',
+      '.text-heading-xlarge',
+      '.pv-text-details__left-panel h1',
+      '.ph5 h1',
+      'section.artdeco-card h1',
+      'h1[tabindex="-1"]',
+      'h1',
+    ];
+    for (const sel of nameSelectors) {
+      const el = document.querySelector(sel);
+      if (el && el.textContent.trim() && el.textContent.trim().length < 80) {
+        d.name = el.textContent.trim();
+        break;
+      }
+    }
 
     // Headline
-    const hlEl = document.querySelector('.text-body-medium.break-words') ||
-                 document.querySelector('[data-anonymize="headline-text"]');
-    if (hlEl) d.headline = hlEl.textContent.trim();
+    const hlSelectors = [
+      '.text-body-medium.break-words',
+      '[data-anonymize="headline-text"]',
+      '.pv-text-details__left-panel .text-body-medium',
+      '.ph5 .text-body-medium',
+    ];
+    for (const sel of hlSelectors) {
+      const el = document.querySelector(sel);
+      if (el && el.textContent.trim()) {
+        d.headline = el.textContent.trim();
+        break;
+      }
+    }
 
     // Company from headline
     if (d.headline.includes(' at ')) d.company = d.headline.split(' at ').pop().trim();
     else if (d.headline.includes(' @ ')) d.company = d.headline.split(' @ ').pop().trim();
 
+    // Also try to get company from experience section
+    if (!d.company) {
+      const expCompany = document.querySelector('.pv-text-details__right-panel .inline-show-more-text');
+      if (expCompany) d.company = expCompany.textContent.trim();
+    }
+
     // Location
-    const locEl = document.querySelector('.text-body-small.inline.t-black--light.break-words');
-    if (locEl) d.location = locEl.textContent.trim();
+    const locSelectors = [
+      '.text-body-small.inline.t-black--light.break-words',
+      '.pv-text-details__left-panel .text-body-small',
+      'span.text-body-small.inline',
+    ];
+    for (const sel of locSelectors) {
+      const el = document.querySelector(sel);
+      if (el && el.textContent.trim()) {
+        d.location = el.textContent.trim();
+        break;
+      }
+    }
 
     // About
     const aboutEl = document.querySelector('#about');
@@ -275,12 +368,13 @@
       }
     }
 
+    console.log('[OutreachPro] Scraped profile:', d.name, '|', d.headline);
     return d;
   }
 
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   // 3. Find the Action Bar (scoped to main profile card ONLY)
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
 
   // Helper: check element is in the main content, NOT in sidebar/aside
   function isInMainContent(el) {
@@ -384,9 +478,9 @@
     return null;
   }
 
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   // 4. Button Injection
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   function injectButton() {
     // Guard: not a profile page
     if (!location.pathname.startsWith('/in/')) return;
@@ -401,7 +495,7 @@
 
     const badge = document.createElement('span');
     badge.className = 'outreach-pro-badge';
-    badge.textContent = '✨ AI Powered';
+    badge.textContent = 'AI Powered';
 
     const btn = document.createElement('button');
     btn.className = BUTTON_CLASS;
@@ -418,12 +512,12 @@
     wrapper.appendChild(btn);
     actionBar.appendChild(wrapper);
 
-    console.log('[OutreachPro] ✅ Button injected!');
+    console.log('[OutreachPro] Button injected!');
   }
 
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   // 5. Panel Toggle & Build
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   function togglePanel(wrapper) {
     if (currentPanel) {
       // Close existing
@@ -449,10 +543,10 @@
 
     panel.innerHTML = `
       <div class="op-header">
-        <button class="op-close" id="op-close">×</button>
+        <button class="op-close" id="op-close">&times;</button>
         <div class="op-name">${esc(name)}</div>
         ${hl ? '<div class="op-headline">' + esc(hl) + '</div>' : ''}
-        <div class="op-unlimited"><span>∞</span> Unlimited — No limits, no tokens</div>
+        <div class="op-unlimited"><span>&infin;</span> Unlimited - No limits, no tokens</div>
       </div>
       <div class="op-tabs">
         <button class="op-tab active" data-t="connection_request">🤝 Connection</button>
@@ -472,7 +566,7 @@
         <div class="op-charcount" id="op-charcount" style="display:none;"></div>
       </div>
       <div class="op-actions">
-        <button class="op-gen-btn" id="op-gen">✨ Generate Message</button>
+        <button class="op-gen-btn" id="op-gen">✨ Regenerate</button>
         <div style="display:flex;gap:6px;">
           <button class="op-sec-btn" id="op-copy" style="display:none;">📋 Copy</button>
           <button class="op-insert-btn" id="op-insert" style="display:none;">➤ Insert</button>
@@ -481,7 +575,7 @@
       <div class="op-cv-prompt" id="op-cv-prompt">
         <span>📄</span><span><a id="op-cv-link">Upload your CV</a> for better personalization</span>
       </div>
-      <div class="op-footer">Powered by <span class="op-hl">OutreachPro</span> — <span class="op-hl">∞ Unlimited</span> messages</div>
+      <div class="op-footer">Powered by <span class="op-hl">OutreachPro</span> - <span class="op-hl">&infin; Unlimited</span> messages</div>
     `;
 
     document.body.appendChild(panel);
@@ -503,23 +597,37 @@
     setupPanelHandlers(panel, profile);
   }
 
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   // 6. Panel Handlers
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   async function setupPanelHandlers(panel, profile) {
     let type = 'connection_request';
     let tone = 'professional';
 
     // Load CV from storage
-    let cv = { name: '', summary: '', skills: '', experience: '' };
+    let cv = { name: '', summary: '', skills: '', experience: '', signature: '' };
     try {
       const r = await chrome.storage.local.get('outreach_pro_user_cv');
       if (r.outreach_pro_user_cv) {
         cv = r.outreach_pro_user_cv;
-        if (cv.summary || cv.skills || cv.experience) {
+        if (cv.summary || cv.skills || cv.experience || cv.cvFileName) {
           const prompt = panel.querySelector('#op-cv-prompt');
-          if (prompt) prompt.style.display = 'none';
+          if (prompt) {
+            if (cv.cvFileName) {
+              prompt.innerHTML = `<span>📄</span><span>CV loaded: <strong>${esc(cv.cvFileName)}</strong> <a id="op-cv-link" style="margin-left:6px;">Change</a></span>`;
+            } else {
+              prompt.style.display = 'none';
+            }
+          }
         }
+      }
+    } catch (e) {}
+
+    // Also load signature from settings
+    try {
+      const s = await chrome.storage.local.get('outreach_pro_settings');
+      if (s.outreach_pro_settings && s.outreach_pro_settings.signature && !cv.signature) {
+        cv.signature = s.outreach_pro_settings.signature;
       }
     } catch (e) {}
 
@@ -536,7 +644,7 @@
         panel.querySelectorAll('.op-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
         type = tab.dataset.t;
-        if (textarea.style.display !== 'none') doGenerate();
+        doGenerate();
       };
     });
 
@@ -546,13 +654,13 @@
         panel.querySelectorAll('.op-tone').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         tone = btn.dataset.tone;
-        if (textarea.style.display !== 'none') doGenerate();
+        doGenerate();
       };
     });
 
     // Generate
     function doGenerate() {
-      genBtn.innerHTML = '⏳ Writing drafts...';
+      genBtn.innerHTML = '⏳ Writing...';
       skel.style.display = 'block';
       textarea.style.display = 'none';
       charcount.style.display = 'none';
@@ -604,29 +712,12 @@
       });
     };
 
-    // Insert into LinkedIn
+    // Insert into LinkedIn (FIXED - updated selectors + retry logic)
     insertBtn.onclick = () => {
       if (type === 'connection_request') {
-        const connectBtn = document.querySelector('button[aria-label*="Connect"], button[aria-label*="Invite"]');
-        if (connectBtn) {
-          connectBtn.click();
-          setTimeout(() => {
-            const addNote = document.querySelector('button[aria-label="Add a note"], button.artdeco-button--secondary');
-            if (addNote) { addNote.click(); setTimeout(() => {
-              const ta = document.querySelector('textarea[name="message"], textarea#custom-message, .send-invite__custom-message');
-              if (ta) { ta.value = textarea.value; ta.dispatchEvent(new Event('input', {bubbles:true})); }
-            }, 500); }
-          }, 800);
-        }
+        insertConnectionRequest(textarea.value);
       } else {
-        const msgBtn = document.querySelector('button[aria-label*="Message"], a[aria-label*="Message"]');
-        if (msgBtn) {
-          msgBtn.click();
-          setTimeout(() => {
-            const box = document.querySelector('.msg-form__contenteditable, div[role="textbox"][contenteditable="true"]');
-            if (box) { box.focus(); box.innerHTML = '<p>' + esc(textarea.value) + '</p>'; box.dispatchEvent(new Event('input', {bubbles:true})); }
-          }, 1000);
-        }
+        insertDirectMessage(textarea.value);
       }
     };
 
@@ -635,27 +726,240 @@
     if (cvLink) {
       cvLink.onclick = (e) => {
         e.preventDefault();
-        openCVModal(panel);
+        openCVModal(panel, (updatedCV) => {
+          // Update the local cv variable after save
+          cv = updatedCV;
+          // Update the prompt text
+          const prompt = panel.querySelector('#op-cv-prompt');
+          if (prompt && cv.cvFileName) {
+            prompt.innerHTML = `<span>📄</span><span>CV loaded: <strong>${esc(cv.cvFileName)}</strong> <a id="op-cv-link" style="margin-left:6px;">Change</a></span>`;
+            // Re-attach click handler
+            const newLink = prompt.querySelector('#op-cv-link');
+            if (newLink) {
+              newLink.onclick = (e2) => {
+                e2.preventDefault();
+                openCVModal(panel, (updated) => { cv = updated; });
+              };
+            }
+          } else if (prompt) {
+            prompt.style.display = 'none';
+          }
+          // Auto-regenerate with new CV data
+          doGenerate();
+        });
       };
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 7. CV Upload Modal
-  // ═══════════════════════════════════════════════════════════════
-  function openCVModal(parentPanel) {
+  // ===================================================================
+  // 7. Insert into LinkedIn (FIXED)
+  // ===================================================================
+
+  function showToast(msg, type = '') {
+    const existing = document.querySelector('.op-toast');
+    if (existing) existing.remove();
+    const toast = document.createElement('div');
+    toast.className = 'op-toast' + (type ? ' ' + type : '');
+    toast.textContent = msg;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+  }
+
+  function insertConnectionRequest(text) {
+    // Find the Connect button on the profile using multiple strategies
+    const connectBtn = findButton(['Connect', 'connect'], [
+      'button[aria-label*="connect" i]',
+      'button[aria-label*="Connect"]',
+      'button[aria-label*="Invite"]',
+      'button[aria-label*="invite"]',
+    ]);
+
+    if (!connectBtn) {
+      showToast('Could not find the Connect button. Try clicking it manually, then paste the message.', 'error');
+      navigator.clipboard.writeText(text);
+      return;
+    }
+
+    connectBtn.click();
+
+    // Wait for the Connect modal to appear
+    retryUntil(() => {
+      // Look for "Add a note" button in the connect modal
+      const addNoteBtn = findButton(['Add a note', 'add a note'], [
+        'button[aria-label*="Add a note"]',
+        'button[aria-label*="add a note"]',
+        'button.artdeco-button--secondary',
+      ]);
+      return addNoteBtn;
+    }, 3000, 300).then(addNoteBtn => {
+      if (addNoteBtn) {
+        addNoteBtn.click();
+        // Wait for textarea to appear
+        retryUntil(() => {
+          return document.querySelector('textarea[name="message"], textarea#custom-message, .send-invite__custom-message, textarea.connect-button-send-invite__custom-message');
+        }, 2000, 200).then(ta => {
+          if (ta) {
+            setNativeValue(ta, text);
+            showToast('Message inserted! Click Send to finish.', 'success');
+          } else {
+            navigator.clipboard.writeText(text);
+            showToast('Message copied to clipboard. Paste it in the note field.', 'success');
+          }
+        });
+      } else {
+        // Maybe the modal didn't pop up, or it went straight to "Pending"
+        navigator.clipboard.writeText(text);
+        showToast('Message copied to clipboard. Add a note and paste it.', 'success');
+      }
+    });
+  }
+
+  function insertDirectMessage(text) {
+    // Find the Message button
+    const msgBtn = findButton(['Message', 'message'], [
+      'button[aria-label*="Message"]',
+      'button[aria-label*="message"]',
+      'a[aria-label*="Message"]',
+      'a[aria-label*="message"]',
+    ]);
+
+    if (!msgBtn) {
+      navigator.clipboard.writeText(text);
+      showToast('Message copied to clipboard. Open the message window and paste it.', 'success');
+      return;
+    }
+
+    msgBtn.click();
+
+    // Wait for the message box to appear
+    retryUntil(() => {
+      return document.querySelector(
+        '.msg-form__contenteditable, ' +
+        'div[role="textbox"][contenteditable="true"], ' +
+        '.msg-form__msg-content-container div[contenteditable="true"], ' +
+        'div.msg-form__contenteditable[contenteditable="true"]'
+      );
+    }, 3000, 300).then(box => {
+      if (box) {
+        box.focus();
+        // Clear existing content
+        box.innerHTML = '';
+        // Insert text as paragraphs
+        const paragraphs = text.split('\n').filter(l => l.trim());
+        paragraphs.forEach(p => {
+          const pEl = document.createElement('p');
+          pEl.textContent = p;
+          box.appendChild(pEl);
+        });
+        // Trigger input event for LinkedIn's React to pick up
+        box.dispatchEvent(new Event('input', { bubbles: true }));
+        box.dispatchEvent(new Event('change', { bubbles: true }));
+        // Also try KeyboardEvent
+        box.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: ' ' }));
+        box.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: ' ' }));
+        showToast('Message inserted! Review and send.', 'success');
+      } else {
+        navigator.clipboard.writeText(text);
+        showToast('Message copied to clipboard. Paste it in the message box.', 'success');
+      }
+    });
+  }
+
+  // Helper: Find a button by text content or selectors
+  function findButton(textMatches, selectors) {
+    const mainContent = document.querySelector('.scaffold-layout__main, main') || document.body;
+
+    // Try selectors first
+    for (const sel of selectors) {
+      const btns = mainContent.querySelectorAll(sel);
+      for (const btn of btns) {
+        if (isInMainContent(btn)) return btn;
+      }
+    }
+
+    // Try by text content
+    const allButtons = mainContent.querySelectorAll('button, a[role="button"]');
+    for (const btn of allButtons) {
+      if (!isInMainContent(btn)) continue;
+      const text = btn.textContent.trim().toLowerCase();
+      for (const match of textMatches) {
+        if (text === match.toLowerCase() || text.includes(match.toLowerCase())) {
+          return btn;
+        }
+      }
+    }
+
+    // Try document-wide as last resort (for modals that are outside main)
+    for (const sel of selectors) {
+      const btn = document.querySelector(sel);
+      if (btn) return btn;
+    }
+
+    return null;
+  }
+
+  // Helper: Retry until an element is found or timeout
+  function retryUntil(finder, timeoutMs, intervalMs) {
+    return new Promise(resolve => {
+      const start = Date.now();
+      const check = () => {
+        const result = finder();
+        if (result) {
+          resolve(result);
+          return;
+        }
+        if (Date.now() - start > timeoutMs) {
+          resolve(null);
+          return;
+        }
+        setTimeout(check, intervalMs);
+      };
+      check();
+    });
+  }
+
+  // Helper: Set value on input/textarea using native setter (works with React)
+  function setNativeValue(el, value) {
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype, 'value'
+    )?.set || Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, 'value'
+    )?.set;
+
+    if (nativeSetter) {
+      nativeSetter.call(el, value);
+    } else {
+      el.value = value;
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  // ===================================================================
+  // 8. CV Upload Modal (FILE UPLOAD + SIGNATURE)
+  // ===================================================================
+  function openCVModal(parentPanel, onSaveCallback) {
     const modal = document.createElement('div');
+    modal.className = 'op-cv-modal';
     modal.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,0.98);z-index:10;padding:20px;overflow-y:auto;font-family:Inter,sans-serif;border-radius:16px;display:flex;flex-direction:column;';
     modal.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <h3 style="font-size:16px;font-weight:700;margin:0">📄 Upload Your Background</h3>
-        <button id="cv-close" style="background:#f0f0f5;border:none;width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:16px">×</button>
+        <button id="cv-close" style="background:#f0f0f5;border:none;width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:16px">&times;</button>
       </div>
-      <p style="font-size:12px;color:#888;margin-bottom:16px">Paste your resume text so AI-generated messages match your background.</p>
+      <p style="font-size:12px;color:#888;margin-bottom:16px">Upload your CV file and set your signature for AI-generated messages.</p>
       <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Your Name</label>
         <input type="text" id="cv-name" placeholder="John Smith" style="width:100%;padding:10px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:13px;font-family:inherit;outline:none;box-sizing:border-box" /></div>
-      <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Resume / CV Text</label>
-        <textarea id="cv-text" placeholder="Paste resume text here..." style="width:100%;min-height:120px;padding:12px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:12px;font-family:inherit;resize:vertical;outline:none;box-sizing:border-box"></textarea></div>
+
+      <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Resume / CV File</label>
+        <div id="cv-file-area"></div>
+        <input type="file" id="cv-file-input" accept=".pdf,.docx,.txt,.doc" style="display:none" />
+      </div>
+
+      <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Email Signature (appears in all messages)</label>
+        <textarea id="cv-signature" placeholder="Best regards,&#10;Maxmilliam" rows="2" style="width:100%;padding:10px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:12px;font-family:inherit;resize:vertical;outline:none;box-sizing:border-box"></textarea>
+        <p style="font-size:10px;color:#bbb;margin-top:2px">Example: Best regards, Your Name</p></div>
+
       <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Website URL (optional)</label>
         <input type="url" id="cv-web" placeholder="https://yoursite.com" style="width:100%;padding:10px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:13px;font-family:inherit;outline:none;box-sizing:border-box" /></div>
       <button id="cv-save" style="width:100%;padding:12px;font-size:14px;font-weight:600;background:linear-gradient(135deg,#F59E0B,#F97316,#EF4444);color:#fff;border:none;border-radius:10px;cursor:pointer;font-family:inherit;box-shadow:0 3px 12px rgba(249,115,22,0.3)">💾 Save & Personalize</button>
@@ -663,46 +967,144 @@
     `;
     parentPanel.appendChild(modal);
 
-    // Load existing
+    const fileArea = modal.querySelector('#cv-file-area');
+    const fileInput = modal.querySelector('#cv-file-input');
+    let pendingFileText = null;
+    let pendingFileName = null;
+
+    // Load existing CV data
     chrome.storage.local.get('outreach_pro_user_cv', (r) => {
       const c = r.outreach_pro_user_cv || {};
       if (c.name) modal.querySelector('#cv-name').value = c.name;
-      if (c.rawText) modal.querySelector('#cv-text').value = c.rawText;
+      if (c.signature) modal.querySelector('#cv-signature').value = c.signature;
       if (c.website) modal.querySelector('#cv-web').value = c.website;
+
+      // Show file status or drop zone
+      if (c.cvFileName) {
+        showFileInfo(c.cvFileName);
+      } else {
+        showDropZone();
+      }
     });
 
+    function showDropZone() {
+      fileArea.innerHTML = `
+        <div class="op-drop-zone" id="cv-drop-zone">
+          <div class="drop-icon">📎</div>
+          <div class="drop-text">Click to upload or drag and drop</div>
+          <div class="drop-formats">PDF, DOCX, or TXT</div>
+        </div>
+      `;
+      const dropZone = fileArea.querySelector('#cv-drop-zone');
+
+      dropZone.onclick = () => fileInput.click();
+
+      dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+      });
+      dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
+      });
+      dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        const file = e.dataTransfer.files[0];
+        if (file) handleFile(file);
+      });
+    }
+
+    function showFileInfo(fileName) {
+      fileArea.innerHTML = `
+        <div class="op-file-info">
+          <span class="file-icon">📄</span>
+          <span class="file-name">${esc(fileName)}</span>
+          <button class="file-remove" id="cv-file-remove">Remove</button>
+        </div>
+      `;
+      fileArea.querySelector('#cv-file-remove').onclick = () => {
+        pendingFileText = null;
+        pendingFileName = null;
+        showDropZone();
+      };
+    }
+
+    fileInput.onchange = () => {
+      const file = fileInput.files[0];
+      if (file) handleFile(file);
+    };
+
+    async function handleFile(file) {
+      const validExts = ['pdf', 'docx', 'txt', 'doc'];
+      const ext = file.name.split('.').pop().toLowerCase();
+      if (!validExts.includes(ext)) {
+        showToast('Please upload a PDF, DOCX, or TXT file.', 'error');
+        return;
+      }
+
+      showFileInfo(file.name + ' (extracting...)');
+      try {
+        const text = await window.CVManager.extractTextFromFile(file);
+        pendingFileText = text;
+        pendingFileName = file.name;
+        showFileInfo(file.name);
+      } catch (err) {
+        showToast('Could not read file. Try a .txt version.', 'error');
+        showDropZone();
+      }
+    }
+
     modal.querySelector('#cv-close').onclick = () => modal.remove();
+
     modal.querySelector('#cv-save').onclick = () => {
       const name = modal.querySelector('#cv-name').value.trim();
-      const raw = modal.querySelector('#cv-text').value.trim();
+      const signature = modal.querySelector('#cv-signature').value.trim();
       const web = modal.querySelector('#cv-web').value.trim();
-      const lines = raw.split('\n').filter(l => l.trim());
-      const cvData = {
-        name: name || (lines[0] && lines[0].length < 60 ? lines[0] : ''),
-        summary: lines.slice(1, 5).join(' ').substring(0, 400),
-        skills: '', experience: lines.slice(5).join(' ').substring(0, 600),
-        education: '', rawText: raw, website: web,
-        lastUpdated: new Date().toISOString(),
-      };
-      chrome.storage.local.set({ outreach_pro_user_cv: cvData }, () => {
-        const btn = modal.querySelector('#cv-save');
-        btn.textContent = '✅ Saved!';
-        btn.style.background = '#10B981';
-        const prompt = parentPanel.querySelector('#op-cv-prompt');
-        if (prompt) prompt.style.display = 'none';
-        setTimeout(() => modal.remove(), 1000);
+
+      // Get existing data first
+      chrome.storage.local.get('outreach_pro_user_cv', (r) => {
+        const existing = r.outreach_pro_user_cv || {};
+
+        // Use pending file text if available, otherwise keep existing
+        const rawText = pendingFileText || existing.rawText || '';
+        const fileName = pendingFileName || existing.cvFileName || '';
+
+        // Parse the raw text into structured sections
+        const parsed = window.CVManager ? window.CVManager.parseResumeText(rawText) : {};
+
+        const cvData = {
+          name: name || parsed.name || existing.name || '',
+          summary: parsed.summary || existing.summary || '',
+          skills: parsed.skills || existing.skills || '',
+          experience: parsed.experience || existing.experience || '',
+          education: parsed.education || existing.education || '',
+          rawText: rawText,
+          website: web,
+          signature: signature,
+          cvFileName: fileName,
+          cvFileType: pendingFileName ? pendingFileName.split('.').pop().toLowerCase() : (existing.cvFileType || ''),
+          lastUpdated: new Date().toISOString(),
+        };
+
+        chrome.storage.local.set({ outreach_pro_user_cv: cvData }, () => {
+          const btn = modal.querySelector('#cv-save');
+          btn.textContent = '✅ Saved!';
+          btn.style.background = '#10B981';
+          if (onSaveCallback) onSaveCallback(cvData);
+          setTimeout(() => modal.remove(), 800);
+        });
       });
     };
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 8. Utilities
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
+  // 9. Utilities
+  // ===================================================================
   function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-  // ═══════════════════════════════════════════════════════════════
-  // 9. SPA Observer & Init
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
+  // 10. SPA Observer & Init
+  // ===================================================================
   function startObserving() {
     if (observer) observer.disconnect();
     let timer = null;

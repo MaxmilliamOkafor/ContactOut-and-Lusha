@@ -1,7 +1,7 @@
 /**
- * OutreachPro — Popup UI Logic
+ * OutreachPro - Popup UI Logic
  * 
- * Handles CV upload, template management, and settings
+ * Handles CV file upload, template management, and settings
  * for the extension popup page.
  */
 (function () {
@@ -11,9 +11,9 @@
   const SETTINGS_KEY = 'outreach_pro_settings';
   const TEMPLATES_KEY = 'outreach_pro_templates';
 
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   // Tab Switching
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   document.querySelectorAll('.popup-tab').forEach(tab => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.popup-tab').forEach(t => t.classList.remove('active'));
@@ -23,87 +23,210 @@
     });
   });
 
-  // ═══════════════════════════════════════════════════════════════
-  // Profile Tab — Load & Save CV
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
+  // Profile Tab - Load & Save CV + File Upload + Signature
+  // ===================================================================
+  let pendingFileText = null;
+  let pendingFileName = null;
+
   function loadProfile() {
     chrome.storage.local.get(CV_KEY, (result) => {
       const cv = result[CV_KEY] || {};
       document.getElementById('user-name').value = cv.name || '';
-      document.getElementById('user-summary').value = cv.summary || '';
-      document.getElementById('user-skills').value = cv.skills || '';
-      document.getElementById('user-experience').value = cv.experience || '';
-      document.getElementById('user-education').value = cv.education || '';
-      document.getElementById('user-raw-text').value = cv.rawText || '';
+      document.getElementById('user-signature').value = cv.signature || '';
       document.getElementById('user-website').value = cv.website || '';
+
+      // Show file status or drop zone
+      if (cv.cvFileName) {
+        showFileInfo(cv.cvFileName);
+        pendingFileName = cv.cvFileName;
+      } else {
+        showDropZone();
+      }
+
+      // If we have extracted sections, show them
+      if (cv.summary || cv.skills || cv.experience || cv.education) {
+        showExtractedSections(cv);
+      }
     });
   }
 
-  document.getElementById('save-profile-btn').addEventListener('click', () => {
-    const cvData = {
-      name: document.getElementById('user-name').value.trim(),
-      summary: document.getElementById('user-summary').value.trim(),
-      skills: document.getElementById('user-skills').value.trim(),
-      experience: document.getElementById('user-experience').value.trim(),
-      education: document.getElementById('user-education').value.trim(),
-      rawText: document.getElementById('user-raw-text').value.trim(),
-      website: document.getElementById('user-website').value.trim(),
-      lastUpdated: new Date().toISOString(),
-    };
+  function showDropZone() {
+    const fileArea = document.getElementById('cv-file-area');
+    if (!fileArea) return;
+    fileArea.innerHTML = `
+      <div class="cv-drop-zone" id="cv-drop-zone">
+        <div style="font-size:28px;margin-bottom:6px;">📎</div>
+        <div style="font-size:12px;color:#888;">Click to upload or drag and drop your CV</div>
+        <div style="font-size:10px;color:#bbb;margin-top:4px;">PDF, DOCX, or TXT</div>
+      </div>
+    `;
+    const dropZone = document.getElementById('cv-drop-zone');
+    const fileInput = document.getElementById('cv-file-input');
 
-    chrome.storage.local.set({ [CV_KEY]: cvData }, () => {
+    if (dropZone) {
+      dropZone.onclick = () => fileInput.click();
+      dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = '#F97316';
+        dropZone.style.background = 'rgba(249,115,22,0.04)';
+      });
+      dropZone.addEventListener('dragleave', () => {
+        dropZone.style.borderColor = '';
+        dropZone.style.background = '';
+      });
+      dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = '';
+        dropZone.style.background = '';
+        const file = e.dataTransfer.files[0];
+        if (file) handleFileUpload(file);
+      });
+    }
+  }
+
+  function showFileInfo(fileName) {
+    const fileArea = document.getElementById('cv-file-area');
+    if (!fileArea) return;
+    fileArea.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;padding:12px;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.2);border-radius:10px;">
+        <span style="font-size:20px;">📄</span>
+        <span style="font-size:12px;font-weight:600;color:#10B981;flex:1;">${escapeHtml(fileName)}</span>
+        <button id="cv-file-remove" style="font-size:11px;color:#EF4444;cursor:pointer;font-weight:600;background:none;border:none;">Remove</button>
+        <button id="cv-file-replace" style="font-size:11px;color:#F97316;cursor:pointer;font-weight:600;background:none;border:none;">Replace</button>
+      </div>
+    `;
+    const removeBtn = document.getElementById('cv-file-remove');
+    const replaceBtn = document.getElementById('cv-file-replace');
+    const fileInput = document.getElementById('cv-file-input');
+
+    if (removeBtn) {
+      removeBtn.onclick = () => {
+        pendingFileText = '';
+        pendingFileName = '';
+        showDropZone();
+        // Hide extracted sections
+        const sections = document.getElementById('cv-extracted-sections');
+        if (sections) sections.style.display = 'none';
+      };
+    }
+    if (replaceBtn) {
+      replaceBtn.onclick = () => fileInput.click();
+    }
+  }
+
+  function showExtractedSections(cv) {
+    const sections = document.getElementById('cv-extracted-sections');
+    if (!sections) return;
+    sections.style.display = 'block';
+    const summary = document.getElementById('user-summary');
+    const skills = document.getElementById('user-skills');
+    const experience = document.getElementById('user-experience');
+    const education = document.getElementById('user-education');
+    if (summary) summary.value = cv.summary || '';
+    if (skills) skills.value = cv.skills || '';
+    if (experience) experience.value = cv.experience || '';
+    if (education) education.value = cv.education || '';
+  }
+
+  async function handleFileUpload(file) {
+    const validExts = ['pdf', 'docx', 'txt', 'doc'];
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!validExts.includes(ext)) {
       const status = document.getElementById('save-status');
-      status.textContent = '✅ Profile saved successfully!';
-      setTimeout(() => { status.textContent = ''; }, 3000);
+      if (status) {
+        status.textContent = '❌ Please upload a PDF, DOCX, or TXT file.';
+        status.style.color = '#EF4444';
+        setTimeout(() => { status.textContent = ''; }, 3000);
+      }
+      return;
+    }
+
+    showFileInfo(file.name + ' (extracting...)');
+
+    try {
+      const text = await CVManager.extractTextFromFile(file);
+      pendingFileText = text;
+      pendingFileName = file.name;
+      showFileInfo(file.name);
+
+      // Auto-extract sections
+      const parsed = CVManager.parseResumeText(text);
+      showExtractedSections(parsed);
+
+      // Auto-fill name if empty
+      const nameInput = document.getElementById('user-name');
+      if (nameInput && !nameInput.value && parsed.name) {
+        nameInput.value = parsed.name;
+      }
+
+      const status = document.getElementById('save-status');
+      if (status) {
+        status.textContent = '📄 CV extracted! Review sections and save.';
+        status.style.color = '#10B981';
+        setTimeout(() => { status.textContent = ''; }, 4000);
+      }
+    } catch (err) {
+      const status = document.getElementById('save-status');
+      if (status) {
+        status.textContent = '❌ Could not read file. Try a .txt version.';
+        status.style.color = '#EF4444';
+        setTimeout(() => { status.textContent = ''; }, 3000);
+      }
+      showDropZone();
+    }
+  }
+
+  // File input handler
+  const fileInput = document.getElementById('cv-file-input');
+  if (fileInput) {
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files[0];
+      if (file) handleFileUpload(file);
+    });
+  }
+
+  // Save profile
+  document.getElementById('save-profile-btn').addEventListener('click', () => {
+    // Get existing data first to preserve file text if no new file uploaded
+    chrome.storage.local.get(CV_KEY, (result) => {
+      const existing = result[CV_KEY] || {};
+
+      const rawText = pendingFileText !== null ? pendingFileText : (existing.rawText || '');
+      const fileName = pendingFileName !== null ? pendingFileName : (existing.cvFileName || '');
+
+      // Get fields
+      const summaryEl = document.getElementById('user-summary');
+      const skillsEl = document.getElementById('user-skills');
+      const experienceEl = document.getElementById('user-experience');
+      const educationEl = document.getElementById('user-education');
+
+      const cvData = {
+        name: document.getElementById('user-name').value.trim(),
+        summary: summaryEl ? summaryEl.value.trim() : (existing.summary || ''),
+        skills: skillsEl ? skillsEl.value.trim() : (existing.skills || ''),
+        experience: experienceEl ? experienceEl.value.trim() : (existing.experience || ''),
+        education: educationEl ? educationEl.value.trim() : (existing.education || ''),
+        rawText: rawText,
+        website: document.getElementById('user-website').value.trim(),
+        signature: document.getElementById('user-signature').value.trim(),
+        cvFileName: fileName,
+        cvFileType: fileName ? fileName.split('.').pop().toLowerCase() : '',
+        lastUpdated: new Date().toISOString(),
+      };
+
+      chrome.storage.local.set({ [CV_KEY]: cvData }, () => {
+        const status = document.getElementById('save-status');
+        status.textContent = '✅ Profile saved successfully!';
+        status.style.color = '#10B981';
+        setTimeout(() => { status.textContent = ''; }, 3000);
+      });
     });
   });
 
-  // Auto-extract from raw text
-  document.getElementById('parse-resume-btn').addEventListener('click', () => {
-    const rawText = document.getElementById('user-raw-text').value.trim();
-    if (!rawText) return;
-
-    // Use CVManager if available, otherwise simple parse
-    const parsed = typeof CVManager !== 'undefined'
-      ? CVManager.parseResumeText(rawText)
-      : simpleParseResume(rawText);
-
-    if (parsed.name && !document.getElementById('user-name').value) {
-      document.getElementById('user-name').value = parsed.name;
-    }
-    if (parsed.summary) {
-      document.getElementById('user-summary').value = parsed.summary;
-    }
-    if (parsed.skills) {
-      document.getElementById('user-skills').value = parsed.skills;
-    }
-    if (parsed.experience) {
-      document.getElementById('user-experience').value = parsed.experience;
-    }
-    if (parsed.education) {
-      document.getElementById('user-education').value = parsed.education;
-    }
-
-    const status = document.getElementById('save-status');
-    status.textContent = '🔍 Sections extracted! Review and save.';
-    setTimeout(() => { status.textContent = ''; }, 3000);
-  });
-
-  function simpleParseResume(rawText) {
-    const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
-    return {
-      name: lines[0] && lines[0].length < 60 ? lines[0] : '',
-      email: (rawText.match(/[\w.+-]+@[\w.-]+\.\w{2,}/) || [''])[0],
-      summary: lines.slice(1, 5).join(' ').substring(0, 400),
-      skills: '',
-      experience: lines.slice(5).join(' ').substring(0, 600),
-      education: '',
-    };
-  }
-
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   // Templates Tab
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   function loadTemplates() {
     chrome.storage.local.get(TEMPLATES_KEY, (result) => {
       const templates = result[TEMPLATES_KEY] || getDefaultTemplates();
@@ -123,13 +246,13 @@
         id: 'default-2',
         name: 'Mutual Interest',
         type: 'direct_message',
-        body: 'Hi {firstName},\n\nYour experience as {headline} caught my attention. I\'m particularly interested in {company}\'s approach.\n\n{mySummary}\n\nWould love to exchange ideas sometime.\n\nBest,\n{myName}',
+        body: 'Hi {firstName},\n\nYour experience as {headline} caught my attention. I am particularly interested in {company}\'s approach.\n\n{mySummary}\n\nWould love to exchange ideas sometime.\n\n{mySignature}',
       },
       {
         id: 'default-3',
         name: 'Professional Intro',
         type: 'email',
-        body: 'Subject: Connecting over shared interests\n\nHi {firstName},\n\nI came across your profile and was impressed by your work at {company}. {mySummary}\n\nI believe there\'s a meaningful opportunity for us to connect and share insights.\n\nWould you have time for a brief chat this week?\n\nBest regards,\n{myName}',
+        body: 'Subject: Connecting over shared interests\n\nHi {firstName},\n\nI came across your profile and was impressed by your work at {company}. {mySummary}\n\nI believe there is a meaningful opportunity for us to connect and share insights.\n\nWould you have time for a brief chat this week?\n\n{mySignature}',
       },
     ];
   }
@@ -189,7 +312,7 @@
     if (!name) return;
     const type = prompt('Type (connection_request, direct_message, email, follow_up):', 'connection_request');
     if (!type) return;
-    const body = prompt('Template body (use placeholders like {firstName}, {company}, etc.):');
+    const body = prompt('Template body (use placeholders like {firstName}, {company}, {mySignature}, etc.):');
     if (!body) return;
 
     chrome.storage.local.get(TEMPLATES_KEY, (result) => {
@@ -204,9 +327,9 @@
     });
   });
 
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   // Settings Tab
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   function loadSettings() {
     chrome.storage.local.get(SETTINGS_KEY, (result) => {
       const settings = result[SETTINGS_KEY] || {};
@@ -232,18 +355,18 @@
     });
   });
 
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   // Utility
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
   }
 
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   // Init
-  // ═══════════════════════════════════════════════════════════════
+  // ===================================================================
   loadProfile();
   loadTemplates();
   loadSettings();

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OutreachPro — LinkedIn AI Outreach</title>
+  <title>OutreachPro - LinkedIn AI Outreach</title>
   <link rel="stylesheet" href="../css/outreach_popup.css" />
 </head>
 <body>
@@ -17,7 +17,7 @@
           <p class="brand-subtitle">AI-Powered LinkedIn Outreach</p>
         </div>
       </div>
-      <div class="unlimited-pill">∞ Unlimited</div>
+      <div class="unlimited-pill">&infin; Unlimited</div>
     </header>
 
     <!-- Tab Navigation -->
@@ -37,39 +37,53 @@
     <div class="tab-content active" id="tab-profile">
       <div class="section-card">
         <h2 class="section-title">📄 Your Resume / CV</h2>
-        <p class="section-desc">Upload your background so generated messages match your experience, skills, and personality.</p>
+        <p class="section-desc">Upload your CV file and configure your signature so generated messages match your background.</p>
         
         <div class="form-group">
           <label>Full Name</label>
           <input type="text" id="user-name" placeholder="John Smith" />
         </div>
 
-        <div class="form-group">
-          <label>Professional Summary</label>
-          <textarea id="user-summary" placeholder="Brief summary of your professional background, goals, and strengths..." rows="3"></textarea>
-        </div>
+        <div class="form-divider"></div>
+
+        <h3 class="section-subtitle">📎 Upload CV File</h3>
+        <p class="section-desc" style="font-size:11px;">Upload a PDF, DOCX, or TXT file. It will persist for future outreach until you remove or replace it.</p>
 
         <div class="form-group">
-          <label>Key Skills <span class="hint">(comma-separated)</span></label>
-          <input type="text" id="user-skills" placeholder="Python, Product Management, Data Science, Leadership..." />
+          <div id="cv-file-area" class="cv-file-area">
+            <!-- Populated by JS - shows drop zone or file info -->
+          </div>
+          <input type="file" id="cv-file-input" accept=".pdf,.docx,.txt,.doc" style="display:none" />
         </div>
 
-        <div class="form-group">
-          <label>Experience Highlights</label>
-          <textarea id="user-experience" placeholder="Key roles, companies, achievements..." rows="3"></textarea>
-        </div>
+        <div id="cv-extracted-sections" style="display:none;">
+          <div class="form-group">
+            <label>Professional Summary <span class="hint">(auto-extracted)</span></label>
+            <textarea id="user-summary" placeholder="Brief summary of your professional background..." rows="3"></textarea>
+          </div>
 
-        <div class="form-group">
-          <label>Education</label>
-          <input type="text" id="user-education" placeholder="Degree, University, Year" />
+          <div class="form-group">
+            <label>Key Skills <span class="hint">(comma-separated)</span></label>
+            <input type="text" id="user-skills" placeholder="Python, Product Management, Data Science..." />
+          </div>
+
+          <div class="form-group">
+            <label>Experience Highlights</label>
+            <textarea id="user-experience" placeholder="Key roles, companies, achievements..." rows="3"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>Education</label>
+            <input type="text" id="user-education" placeholder="Degree, University, Year" />
+          </div>
         </div>
 
         <div class="form-divider"></div>
 
-        <h3 class="section-subtitle">📎 Or paste your full resume text</h3>
+        <h3 class="section-subtitle">✍️ Email Signature</h3>
+        <p class="section-desc" style="font-size:11px;">This signature will be automatically added to the end of every generated message.</p>
         <div class="form-group">
-          <textarea id="user-raw-text" placeholder="Paste your entire resume text here and we'll extract the key sections automatically..." rows="5"></textarea>
-          <button class="btn-secondary" id="parse-resume-btn">🔍 Auto-Extract Sections</button>
+          <textarea id="user-signature" placeholder="Best regards,&#10;Maxmilliam" rows="2"></textarea>
         </div>
 
         <div class="form-divider"></div>
@@ -162,7 +176,7 @@
       <div class="section-card" style="margin-top: 12px;">
         <h2 class="section-title" style="font-size: 14px;">💡 About OutreachPro</h2>
         <p class="section-desc" style="margin-bottom: 4px;">
-          AI-powered LinkedIn outreach — <strong style="color: #F97316;">completely unlimited</strong>. No tokens, no coins, no credits, no subscriptions.
+          AI-powered LinkedIn outreach - <strong style="color: #F97316;">completely unlimited</strong>. No tokens, no coins, no credits, no subscriptions.
         </p>
         <p class="section-desc" style="font-size: 10px; opacity: 0.5;">
           All data stored locally in your browser. Privacy-first.
@@ -172,7 +186,7 @@
 
     <!-- Footer -->
     <footer class="popup-footer">
-      <span>OutreachPro</span> · <span style="color: #F97316;">∞ Unlimited</span> · Zero limits
+      <span>OutreachPro</span> · <span style="color: #F97316;">&infin; Unlimited</span> · Zero limits
     </footer>
   </div>
 

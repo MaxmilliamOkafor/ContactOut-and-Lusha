@@ -1,5 +1,5 @@
 /**
- * OutreachPro — Background Message Router
+ * OutreachPro - Background Message Router
  * 
  * Handles communication between popup ↔ content script,
  * CV storage operations, and template management.
