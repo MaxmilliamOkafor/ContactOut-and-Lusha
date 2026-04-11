@@ -291,6 +291,87 @@
         from { opacity: 0; transform: translateX(-50%) translateY(12px); }
         to { opacity: 1; transform: translateX(-50%) translateY(0); }
       }
+
+      /* ── One-Click Email Send Modal ── */
+      .op-email-provider-card {
+        display: flex; align-items: center; gap: 12px;
+        padding: 12px 16px; border: 1.5px solid #e0e0e5; border-radius: 12px;
+        background: #fff; cursor: pointer; font-family: inherit;
+        font-size: 13px; font-weight: 600; transition: all 0.25s;
+        position: relative;
+      }
+      .op-email-provider-card:hover { border-color: #F97316; background: rgba(249,115,22,0.03); }
+      .op-email-provider-card.selected {
+        border-color: #F97316; background: rgba(249,115,22,0.06);
+        box-shadow: 0 0 0 3px rgba(249,115,22,0.12);
+      }
+      .op-email-provider-card .provider-icon { font-size: 22px; flex-shrink: 0; }
+      .op-email-provider-card .provider-info { flex: 1; }
+      .op-email-provider-card .provider-name { font-size: 13px; font-weight: 600; color: #333; }
+      .op-email-provider-card .provider-email { font-size: 10px; color: #10B981; font-weight: 500; margin-top: 1px; }
+      .op-email-provider-card .provider-status {
+        font-size: 9px; font-weight: 700; padding: 3px 8px; border-radius: 8px;
+        text-transform: uppercase; letter-spacing: 0.03em;
+      }
+      .op-email-provider-card .provider-status.connected {
+        background: rgba(16,185,129,0.1); color: #10B981;
+      }
+      .op-email-provider-card .provider-status.disconnected {
+        background: rgba(239,68,68,0.08); color: #EF4444;
+      }
+      .op-email-provider-card .provider-radio {
+        width: 18px; height: 18px; border-radius: 50%;
+        border: 2px solid #ddd; flex-shrink: 0; position: relative;
+        transition: all 0.2s;
+      }
+      .op-email-provider-card.selected .provider-radio {
+        border-color: #F97316;
+      }
+      .op-email-provider-card.selected .provider-radio::after {
+        content: ''; position: absolute; top: 3px; left: 3px;
+        width: 8px; height: 8px; border-radius: 50%;
+        background: #F97316;
+      }
+      .op-send-now-btn {
+        width: 100%; padding: 13px; font-size: 14px; font-weight: 700;
+        background: linear-gradient(135deg, #F59E0B 0%, #F97316 50%, #EF4444 100%);
+        color: #fff; border: none; border-radius: 12px; cursor: pointer;
+        font-family: inherit; box-shadow: 0 4px 16px rgba(249,115,22,0.35);
+        transition: all 0.3s; display: flex; align-items: center;
+        justify-content: center; gap: 8px;
+      }
+      .op-send-now-btn:hover:not(:disabled) {
+        transform: translateY(-1px); box-shadow: 0 6px 24px rgba(249,115,22,0.5);
+      }
+      .op-send-now-btn:disabled {
+        opacity: 0.5; cursor: not-allowed; transform: none;
+      }
+      .op-send-now-btn .op-spinner {
+        width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3);
+        border-top-color: #fff; border-radius: 50%;
+        animation: op-spin 0.7s linear infinite;
+      }
+      @keyframes op-spin { to { transform: rotate(360deg); } }
+      .op-connect-btn {
+        padding: 5px 12px; font-size: 10px; font-weight: 600;
+        background: linear-gradient(135deg, #F59E0B, #F97316);
+        color: #fff; border: none; border-radius: 8px; cursor: pointer;
+        font-family: inherit; transition: all 0.2s;
+      }
+      .op-connect-btn:hover { transform: scale(1.04); }
+      .op-disconnect-btn {
+        padding: 4px 8px; font-size: 9px; font-weight: 600;
+        background: none; color: #EF4444; border: 1px solid #EF4444;
+        border-radius: 6px; cursor: pointer; font-family: inherit;
+        transition: all 0.2s;
+      }
+      .op-disconnect-btn:hover { background: rgba(239,68,68,0.06); }
+      .op-email-body-preview {
+        padding: 10px 12px; background: #f9f9fc; border-radius: 10px;
+        border: 1px solid #eee; font-size: 11px; color: #555;
+        line-height: 1.6; max-height: 100px; overflow-y: auto;
+        white-space: pre-wrap; word-wrap: break-word;
+      }
     `;
     document.head.appendChild(style);
   }
@@ -1447,82 +1528,219 @@
   }
 
   // ===================================================================
-  // 10. Email Send Modal (Gmail, Yahoo, Outlook, default)
+  // 10. One-Click Email Send Modal (Gmail, Outlook, Yahoo — backend API)
   // ===================================================================
   function openEmailSendModal(parentPanel, recipientEmail, subject, body) {
     const modal = document.createElement('div');
     modal.className = 'op-cv-modal';
     modal.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,0.98);z-index:10;padding:20px;overflow-y:auto;font-family:Inter,sans-serif;border-radius:16px;display:flex;flex-direction:column;';
+
+    let selectedProvider = '';
+
     modal.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-        <h3 style="font-size:16px;font-weight:700;margin:0">\ud83d\udce7 Send Email</h3>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <h3 style="font-size:16px;font-weight:700;margin:0">⚡ One-Click Email Send</h3>
         <button id="email-close" style="background:#f0f0f5;border:none;width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:16px">&times;</button>
       </div>
 
-      <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Recipient Email</label>
-        <input type="email" id="email-to" value="${esc(recipientEmail)}" placeholder="recipient@email.com" style="width:100%;padding:10px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:13px;font-family:inherit;outline:none;box-sizing:border-box" /></div>
-
-      <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Subject</label>
-        <input type="text" id="email-subject" value="${esc(subject)}" style="width:100%;padding:10px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:13px;font-family:inherit;outline:none;box-sizing:border-box" /></div>
-
-      <p style="font-size:11px;color:#888;margin-bottom:12px">Choose your email provider to open a compose window:</p>
-
-      <div style="display:flex;flex-direction:column;gap:8px;">
-        <button class="email-provider-btn" data-provider="gmail" style="display:flex;align-items:center;gap:10px;padding:12px 16px;border:1.5px solid #e0e0e5;border-radius:10px;background:#fff;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;transition:all 0.2s">
-          <span style="font-size:18px">\ud83d\udce8</span> <span>Open in Gmail</span>
-          <span style="margin-left:auto;font-size:10px;color:#888">gmail.com</span>
-        </button>
-        <button class="email-provider-btn" data-provider="outlook" style="display:flex;align-items:center;gap:10px;padding:12px 16px;border:1.5px solid #e0e0e5;border-radius:10px;background:#fff;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;transition:all 0.2s">
-          <span style="font-size:18px">\ud83d\udceb</span> <span>Open in Outlook</span>
-          <span style="margin-left:auto;font-size:10px;color:#888">outlook.com</span>
-        </button>
-        <button class="email-provider-btn" data-provider="yahoo" style="display:flex;align-items:center;gap:10px;padding:12px 16px;border:1.5px solid #e0e0e5;border-radius:10px;background:#fff;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;transition:all 0.2s">
-          <span style="font-size:18px">\ud83d\udce9</span> <span>Open in Yahoo Mail</span>
-          <span style="margin-left:auto;font-size:10px;color:#888">mail.yahoo.com</span>
-        </button>
-        <button class="email-provider-btn" data-provider="default" style="display:flex;align-items:center;gap:10px;padding:12px 16px;border:1.5px solid #e0e0e5;border-radius:10px;background:#fff;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;transition:all 0.2s">
-          <span style="font-size:18px">\u2709\ufe0f</span> <span>Default Email App</span>
-          <span style="margin-left:auto;font-size:10px;color:#888">mailto:</span>
-        </button>
+      <div style="margin-bottom:12px"><label style="font-size:10px;font-weight:700;color:#F97316;text-transform:uppercase;display:block;margin-bottom:4px">Send From</label>
+        <div id="email-providers" style="display:flex;flex-direction:column;gap:8px"></div>
       </div>
 
-      <p style="font-size:10px;color:#bbb;text-align:center;margin-top:14px">Your message will be pre-filled in the compose window.</p>
+      <div style="margin-bottom:10px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Recipient</label>
+        <input type="email" id="email-to" value="${esc(recipientEmail)}" placeholder="recipient@email.com" style="width:100%;padding:10px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:13px;font-family:inherit;outline:none;box-sizing:border-box" /></div>
+
+      <div style="margin-bottom:10px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Subject</label>
+        <input type="text" id="email-subject" value="${esc(subject)}" style="width:100%;padding:10px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:13px;font-family:inherit;outline:none;box-sizing:border-box" /></div>
+
+      <div style="margin-bottom:12px"><label style="font-size:11px;font-weight:600;color:#555;display:block;margin-bottom:4px">Message Preview</label>
+        <div class="op-email-body-preview" id="email-body-preview"></div>
+      </div>
+
+      <button class="op-send-now-btn" id="email-send-now" disabled>
+        <span id="email-send-icon">⚡</span>
+        <span id="email-send-text">Select a provider above</span>
+      </button>
+
+      <p style="font-size:10px;color:#bbb;text-align:center;margin-top:10px">Sends directly from your connected account. No tabs, no compose windows.</p>
     `;
     parentPanel.appendChild(modal);
 
+    // Fill body preview
+    const bodyPreview = modal.querySelector('#email-body-preview');
+    bodyPreview.textContent = body.length > 300 ? body.substring(0, 297) + '...' : body;
+
     modal.querySelector('#email-close').onclick = () => modal.remove();
 
-    // Provider click handlers
-    modal.querySelectorAll('.email-provider-btn').forEach(btn => {
-      btn.onmouseover = () => { btn.style.borderColor = '#F97316'; btn.style.background = 'rgba(249,115,22,0.04)'; };
-      btn.onmouseout = () => { btn.style.borderColor = '#e0e0e5'; btn.style.background = '#fff'; };
-      btn.onclick = () => {
-        const provider = btn.dataset.provider;
-        const to = modal.querySelector('#email-to').value.trim();
-        const subj = encodeURIComponent(modal.querySelector('#email-subject').value.trim());
-        const bodyEnc = encodeURIComponent(body);
+    const providersContainer = modal.querySelector('#email-providers');
+    const sendBtn = modal.querySelector('#email-send-now');
+    const sendText = modal.querySelector('#email-send-text');
+    const sendIcon = modal.querySelector('#email-send-icon');
 
-        let url = '';
-        switch (provider) {
-          case 'gmail':
-            url = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${subj}&body=${bodyEnc}`;
-            break;
-          case 'outlook':
-            url = `https://outlook.live.com/mail/0/deeplink/compose?to=${encodeURIComponent(to)}&subject=${subj}&body=${bodyEnc}`;
-            break;
-          case 'yahoo':
-            url = `https://compose.mail.yahoo.com/?to=${encodeURIComponent(to)}&subject=${subj}&body=${bodyEnc}`;
-            break;
-          case 'default':
-          default:
-            url = `mailto:${encodeURIComponent(to)}?subject=${subj}&body=${bodyEnc}`;
-            break;
-        }
+    // Load provider connection status and render cards
+    chrome.runtime.sendMessage({ command: 'outreach_get_provider_status' }, (response) => {
+      const status = response?.data || { gmail: null, outlook: null };
 
+      const providers = [
+        {
+          id: 'gmail',
+          name: 'Gmail',
+          icon: '📧',
+          connected: !!status.gmail,
+          email: status.gmail?.email || '',
+          canDirectSend: true,
+        },
+        {
+          id: 'outlook',
+          name: 'Outlook / Hotmail',
+          icon: '📬',
+          connected: !!status.outlook,
+          email: status.outlook?.email || '',
+          canDirectSend: true,
+        },
+        {
+          id: 'yahoo',
+          name: 'Yahoo Mail',
+          icon: '📩',
+          connected: false,
+          email: '',
+          canDirectSend: false,
+        },
+      ];
+
+      providers.forEach(p => {
+        const card = document.createElement('div');
+        card.className = 'op-email-provider-card';
+        card.dataset.provider = p.id;
+
+        card.innerHTML = `
+          <div class="provider-radio"></div>
+          <span class="provider-icon">${p.icon}</span>
+          <div class="provider-info">
+            <div class="provider-name">${p.name}</div>
+            ${p.connected ? `<div class="provider-email">✓ ${esc(p.email)}</div>` : ''}
+          </div>
+          ${p.connected
+            ? `<span class="provider-status connected">Connected</span>
+               <button class="op-disconnect-btn" data-provider="${p.id}">×</button>`
+            : (p.canDirectSend
+              ? `<button class="op-connect-btn" data-provider="${p.id}">Connect</button>`
+              : `<span class="provider-status disconnected">Compose tab</span>`)
+          }
+        `;
+
+        // Click card to select provider
+        card.addEventListener('click', (e) => {
+          if (e.target.classList.contains('op-connect-btn') || e.target.classList.contains('op-disconnect-btn')) return;
+          providersContainer.querySelectorAll('.op-email-provider-card').forEach(c => c.classList.remove('selected'));
+          card.classList.add('selected');
+          selectedProvider = p.id;
+          sendBtn.disabled = false;
+          if (p.connected || !p.canDirectSend) {
+            sendText.textContent = p.canDirectSend ? `Send via ${p.name}` : `Open ${p.name} Compose`;
+          } else {
+            sendText.textContent = `Connect ${p.name} first`;
+            sendBtn.disabled = true;
+          }
+        });
+
+        providersContainer.appendChild(card);
+      });
+
+      // Auto-select first connected provider
+      const firstConnected = providers.find(p => p.connected);
+      if (firstConnected) {
+        const card = providersContainer.querySelector(`[data-provider="${firstConnected.id}"]`);
+        if (card) card.click();
+      }
+
+      // Connect button handlers
+      providersContainer.querySelectorAll('.op-connect-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const provider = btn.dataset.provider;
+          btn.textContent = '...';
+          btn.disabled = true;
+
+          const command = provider === 'gmail' ? 'outreach_connect_gmail' : 'outreach_connect_outlook';
+          chrome.runtime.sendMessage({ command }, (result) => {
+            if (result?.success) {
+              showToast(`✅ ${provider === 'gmail' ? 'Gmail' : 'Outlook'} connected: ${result.email || 'Success'}`, 'success');
+              // Refresh the modal
+              modal.remove();
+              openEmailSendModal(parentPanel, recipientEmail, subject, body);
+            } else {
+              showToast(`❌ Connection failed: ${result?.error || 'Unknown error'}`, 'error');
+              btn.textContent = 'Connect';
+              btn.disabled = false;
+            }
+          });
+        });
+      });
+
+      // Disconnect button handlers
+      providersContainer.querySelectorAll('.op-disconnect-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const provider = btn.dataset.provider;
+          const command = provider === 'gmail' ? 'outreach_disconnect_gmail' : 'outreach_disconnect_outlook';
+          chrome.runtime.sendMessage({ command }, () => {
+            showToast(`${provider === 'gmail' ? 'Gmail' : 'Outlook'} disconnected`, 'success');
+            modal.remove();
+            openEmailSendModal(parentPanel, recipientEmail, subject, body);
+          });
+        });
+      });
+    });
+
+    // ── SEND NOW handler ──
+    sendBtn.addEventListener('click', () => {
+      if (!selectedProvider || sendBtn.disabled) return;
+
+      const to = modal.querySelector('#email-to').value.trim();
+      const subj = modal.querySelector('#email-subject').value.trim();
+
+      if (!to || !to.includes('@')) {
+        showToast('Please enter a valid recipient email.', 'error');
+        return;
+      }
+      if (!subj) {
+        showToast('Please enter a subject line.', 'error');
+        return;
+      }
+
+      // Yahoo: no API, fall back to compose tab
+      if (selectedProvider === 'yahoo') {
+        const url = `https://compose.mail.yahoo.com/?to=${encodeURIComponent(to)}&subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body)}`;
         window.open(url, '_blank');
-        showToast('Email compose opened!', 'success');
+        showToast('Yahoo Mail compose opened with your message!', 'success');
         modal.remove();
-      };
+        return;
+      }
+
+      // Gmail / Outlook: send via backend API
+      sendBtn.disabled = true;
+      sendIcon.innerHTML = '<div class="op-spinner"></div>';
+      sendText.textContent = 'Sending...';
+
+      chrome.runtime.sendMessage({
+        command: 'outreach_send_email',
+        data: { provider: selectedProvider, to, subject: subj, body }
+      }, (result) => {
+        if (result?.success) {
+          sendIcon.textContent = '✅';
+          sendText.textContent = 'Email Sent!';
+          sendBtn.style.background = '#10B981';
+          showToast(`✅ Email sent via ${selectedProvider === 'gmail' ? 'Gmail' : 'Outlook'}!`, 'success');
+          setTimeout(() => modal.remove(), 1500);
+        } else {
+          sendIcon.textContent = '⚡';
+          sendText.textContent = 'Send Failed — Try Again';
+          sendBtn.disabled = false;
+          sendBtn.style.background = '';
+          showToast(`❌ ${result?.error || 'Failed to send. Check your connection.'}`, 'error');
+        }
+      });
     });
   }
 

@@ -101,6 +101,16 @@
     },
     {
       "matches": [
+        "*://*.linkedin.com/messaging/*",
+        "*://*.linkedin.com/in/*",
+        "*://*.linkedin.com/*"
+      ],
+      "js": ["/app/dm_response_generator.js", "/app/email_provider_handler.js"],
+      "css": [],
+      "run_at": "document_end"
+    },
+    {
+      "matches": [
         "*://*.linkedin.com/home",
         "*://*.linkedin.com/authwall",
         "*://*.linkedin.com/uas/login",
@@ -157,7 +167,9 @@
     "storage",
     "alarms",
     "system.display",
-    "tabs"
+    "tabs",
+    "identity",
+    "identity.email"
   ],
   "host_permissions": [
     "https://contactout.com/",
@@ -167,7 +179,11 @@
     "https://outlook.live.com/",
     "https://outlook.office.com/",
     "https://outlook.office365.com/",
-    "https://*.hubspot.com/"
+    "https://*.hubspot.com/",
+    "https://www.googleapis.com/",
+    "https://gmail.googleapis.com/",
+    "https://graph.microsoft.com/",
+    "https://login.microsoftonline.com/"
   ],
   "optional_permissions": [],
   "optional_host_permissions": [
@@ -178,6 +194,12 @@
   "background": {
     "service_worker": "/app/background.js",
     "type": "module"
+  },
+  "oauth2": {
+    "scopes": [
+      "https://www.googleapis.com/auth/gmail.send",
+      "email"
+    ]
   },
   "web_accessible_resources": [
     {
