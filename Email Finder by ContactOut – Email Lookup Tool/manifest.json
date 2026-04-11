@@ -195,12 +195,7 @@
     "service_worker": "/app/background.js",
     "type": "module"
   },
-  "oauth2": {
-    "scopes": [
-      "https://www.googleapis.com/auth/gmail.send",
-      "email"
-    ]
-  },
+
   "web_accessible_resources": [
     {
       "resources": [
