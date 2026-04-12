@@ -22,6 +22,82 @@
   let injectionAttempts = 0;
   const MAX_INJECTION_ATTEMPTS = 50;
 
+  // Track the composer the user most recently interacted with, so that when
+  // multiple chat bubbles are open we scrape and insert into the *current*
+  // conversation — not whichever one appears first in the DOM.
+  let lastActiveComposer = null;
+  let activeScopeListenerAttached = false;
+
+  const SCOPE_SELECTORS = [
+    '.msg-overlay-conversation-bubble',
+    'div[class*="msg-overlay-conversation-bubble"]',
+    '.msg-convo-wrapper',
+    '.msg-thread',
+    'div[class*="msg-convo"]',
+    'div[class*="messaging-thread"]',
+  ];
+
+  const COMPOSER_SELECTOR =
+    '.msg-form__contenteditable div[contenteditable="true"], ' +
+    '.msg-form__contenteditable, ' +
+    'div[role="textbox"][contenteditable="true"], ' +
+    'div[contenteditable="true"][class*="msg"]';
+
+  function attachActiveScopeTracking() {
+    if (activeScopeListenerAttached) return;
+    activeScopeListenerAttached = true;
+    const onActivity = (e) => {
+      const t = e.target;
+      if (!t || t.nodeType !== 1) return;
+      const composer = t.closest && t.closest(COMPOSER_SELECTOR);
+      if (composer) lastActiveComposer = composer;
+    };
+    document.addEventListener('focusin', onActivity, true);
+    document.addEventListener('click', onActivity, true);
+  }
+
+  // Walk up from a node to the nearest chat-bubble / thread container.
+  function closestScope(node) {
+    if (!node || node.nodeType !== 1) return null;
+    for (const sel of SCOPE_SELECTORS) {
+      const hit = node.closest && node.closest(sel);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  // Determine which conversation the user is currently working in.
+  // Priority: button's own bubble → last-focused composer's bubble →
+  // visible non-minimized bubble → messaging-page thread → null (document).
+  function findActiveScope(originEl) {
+    // 1. The element that triggered the action (e.g. the clicked AI button).
+    const fromOrigin = closestScope(originEl);
+    if (fromOrigin) return fromOrigin;
+
+    // 2. The composer the user last typed in.
+    if (lastActiveComposer && document.contains(lastActiveComposer)) {
+      const fromComposer = closestScope(lastActiveComposer);
+      if (fromComposer) return fromComposer;
+    }
+
+    // 3. Any open, non-minimized overlay bubble.
+    const bubbles = document.querySelectorAll(
+      '.msg-overlay-conversation-bubble, div[class*="msg-overlay-conversation-bubble"]'
+    );
+    for (const b of bubbles) {
+      const cls = b.className ? b.className.toString() : '';
+      if (cls.includes('--is-minimized') || cls.includes('is-collapsed')) continue;
+      const rect = b.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 80) return b;
+    }
+
+    // 4. Full messaging page thread.
+    const thread = document.querySelector('.msg-thread, div[class*="messaging-thread"]');
+    if (thread) return thread;
+
+    return null;
+  }
+
   // ═══════════════════════════════════════════
   //  0. WAIT-FOR-ELEMENT (Auto Gmail pattern)
   //  Uses MutationObserver to resolve when a selector appears
@@ -363,8 +439,10 @@
   //  3. CONVERSATION SCRAPER (Robust v3)
   //  3 strategies to handle LinkedIn DOM changes
   // ═══════════════════════════════════════════
-  function scrapeConversation() {
+  function scrapeConversation(scope) {
     let messages = [];
+    const root = (scope && document.contains(scope)) ? scope : document;
+    const rootLabel = root === document ? 'document' : (root.className || root.tagName);
 
     // ─── Strategy 1: Specific LinkedIn message selectors ───
     const msgSelectors = [
@@ -378,9 +456,9 @@
 
     let msgElements = [];
     for (const sel of msgSelectors) {
-      msgElements = document.querySelectorAll(sel);
+      msgElements = root.querySelectorAll(sel);
       if (msgElements.length > 0) {
-        console.log('[OutreachPro DM] Scraper Strategy 1 hit:', sel, msgElements.length, 'msgs');
+        console.log('[OutreachPro DM] Scraper Strategy 1 hit:', sel, msgElements.length, 'msgs (scope:', rootLabel, ')');
         break;
       }
     }
@@ -422,7 +500,13 @@
 
       let container = null;
       for (const sel of containerSelectors) {
-        container = document.querySelector(sel);
+        // If we have a scope, search within it first. If the scope itself
+        // matches, use it directly.
+        if (root !== document && root.matches && root.matches(sel)) {
+          container = root;
+        } else {
+          container = root.querySelector(sel);
+        }
         if (container) {
           console.log('[OutreachPro DM] Scraper Strategy 2 hit:', sel);
           break;
@@ -453,12 +537,14 @@
     // ─── Strategy 3: Brute force — get ALL text from the conversation area ───
     if (messages.length === 0) {
       // Find any element that looks like a conversation container
-      const bubble = document.querySelector(
+      const bruteSelector =
         '[class*="msg-overlay-conversation-bubble"], ' +
         '[class*="msg-thread"], ' +
         '[class*="messaging-thread"], ' +
-        '[class*="msg-convo"]'
-      );
+        '[class*="msg-convo"]';
+      const bubble = (root !== document && root.matches && root.matches(bruteSelector))
+        ? root
+        : root.querySelector(bruteSelector);
 
       if (bubble) {
         console.log('[OutreachPro DM] Scraper Strategy 3 (brute force)');
@@ -511,7 +597,10 @@
     ];
 
     for (const sel of nameSelectors) {
-      const el = document.querySelector(sel);
+      // Look inside the active scope first so we get the right partner when
+      // multiple bubbles are open; fall back to document-wide.
+      const el = (root !== document ? root.querySelector(sel) : null)
+        || document.querySelector(sel);
       if (el && el.textContent.trim().length > 1) {
         partnerName = el.textContent.trim();
         console.log('[OutreachPro DM] Partner name found:', partnerName);
@@ -604,6 +693,7 @@
       mentionedNames: [],
       mentionedCompanies: [],
       lastSenderIsMe: lastMsg ? lastMsg.isMe : false,
+      lastMessage: lastMsg || null,
     };
 
     if (!lastMsg) return ctx;
@@ -833,6 +923,21 @@
     return pick(replies);
   }
 
+  // Pull a short, human-sounding reference to the partner's last message so
+  // the reply reads as personal rather than boilerplate.
+  function referenceLastMessage(ctx) {
+    const last = ctx && ctx.lastMessage;
+    if (!last || !last.text) return '';
+    // Use the first complete sentence (or ~90 chars), trimmed.
+    const raw = last.text.replace(/\s+/g, ' ').trim();
+    if (raw.length < 12) return '';
+    let snippet = raw.split(/(?<=[.!?])\s+/)[0] || raw;
+    if (snippet.length > 90) snippet = snippet.slice(0, 87).trim() + '…';
+    // Drop trailing punctuation for cleaner inline quoting.
+    snippet = snippet.replace(/[.!?]+$/, '');
+    return snippet;
+  }
+
   function buildGeneralReply(ctx, tone, goal) {
     // Use key phrases from the conversation to make the reply feel relevant
     const topicResponses = {
@@ -851,12 +956,26 @@
       }
     }
 
-    // Generic but still conversational
+    // Generic but still conversational — weave in a reference to what they
+    // actually said so it doesn't read like a canned template.
+    const ref = referenceLastMessage(ctx);
+    const quoted = ref ? `"${ref}"` : 'that';
+
     const generics = {
-      professional: [`Thanks for sharing that, really appreciate the insight. I'd love to continue this conversation and learn more about the details.\n\nWhat would be the best way to move forward?`],
-      casual: [`That's really interesting! Thanks for sharing. I'd love to keep this conversation going.\n\nWhat are your thoughts on connecting for a quick chat?`],
-      enthusiastic: [`This is so interesting! I really appreciate you sharing that! 🙌\n\nI'd absolutely love to continue this conversation. What's the best way to keep in touch?`],
-      witty: [`Interesting stuff! I could talk about this all day (but I'll spare your inbox).\n\nWant to grab a virtual coffee and chat more? ☕`],
+      professional: [
+        `Appreciate you mentioning ${quoted} — that's genuinely useful context. Happy to dig into it further whenever works for you.\n\nWhat would be a helpful next step on your end?`,
+        `Thanks for the note on ${quoted}. Makes sense, and I'd like to understand your thinking a bit more before suggesting anything.\n\nWhat's most important to you here?`,
+      ],
+      casual: [
+        `Good point on ${quoted} — hadn't thought about it that way. Keen to hear more.\n\nWhat's the best way to keep this going?`,
+        `${ref ? `Your take on ${quoted} makes sense` : 'That makes sense'} — appreciate you sharing. Happy to keep chatting whenever you've got a minute.`,
+      ],
+      enthusiastic: [
+        `${ref ? `Loved what you said about ${quoted}!` : 'Love this!'} 🙌 Definitely want to hear more about where you're taking it.\n\nWhat's next on your end?`,
+      ],
+      witty: [
+        `${ref ? `${quoted} — now that's a thread worth pulling on.` : 'Worth pulling on this thread.'} I'll bite — what's the backstory?`,
+      ],
     };
 
     return pick(generics[tone] || generics.professional);
@@ -955,11 +1074,15 @@
     try {
       const profiles = await getProfiles();
       const profile = profiles[0]; // Use first profile as default
-      const conversation = scrapeConversation();
+      // Scope to the conversation this button belongs to (or the last-
+      // focused one, for the floating button). This prevents scraping /
+      // inserting into a different person's chat when multiple are open.
+      const scope = findActiveScope(btn);
+      const conversation = scrapeConversation(scope);
       const reply = generateResponse(profile, conversation);
 
       // Insert directly into the LinkedIn message box
-      insertIntoMessageBox(reply);
+      insertIntoMessageBox(reply, scope);
     } catch (err) {
       console.error('[OutreachPro DM] Draft error:', err);
       showDMToast('Could not generate reply. Try again.', 'error');
@@ -1100,7 +1223,9 @@
 
   async function buildAIPanel() {
     const profiles = await getProfiles();
-    const conversation = scrapeConversation();
+    // Lock the panel to the conversation active when it was opened.
+    const panelScope = findActiveScope(null);
+    const conversation = scrapeConversation(panelScope);
 
     const panel = document.createElement('div');
     panel.id = PANEL_ID;
@@ -1186,7 +1311,10 @@
       copyBtn.style.display = 'none';
       insertBtn.style.display = 'none';
 
-      const freshConv = scrapeConversation();
+      // Re-resolve scope at click time so the panel follows the user if
+      // they switched bubbles after opening it.
+      const liveScope = findActiveScope(null) || panelScope;
+      const freshConv = scrapeConversation(liveScope);
 
       setTimeout(() => {
         const reply = generateResponse(profile, freshConv);
@@ -1207,14 +1335,17 @@
     };
 
     // Insert
-    insertBtn.onclick = () => insertIntoMessageBox(responseArea.value);
+    insertBtn.onclick = () => insertIntoMessageBox(
+      responseArea.value,
+      findActiveScope(null) || panelScope
+    );
   }
 
   // ═══════════════════════════════════════════
   //  7. INSERT INTO LINKEDIN MESSAGE BOX
   //  React-compatible: fires synthetic events like Auto Gmail
   // ═══════════════════════════════════════════
-  function insertIntoMessageBox(text) {
+  function insertIntoMessageBox(text, scope) {
     const boxSelectors = [
       '.msg-form__contenteditable div[contenteditable="true"]',
       '.msg-form__contenteditable',
@@ -1225,9 +1356,29 @@
     ];
 
     let box = null;
-    for (const sel of boxSelectors) {
-      box = document.querySelector(sel);
-      if (box) break;
+
+    // Prefer the composer the user most recently typed in — that's the one
+    // tied to the currently-active conversation.
+    if (lastActiveComposer && document.contains(lastActiveComposer)) {
+      if (!scope || scope.contains(lastActiveComposer)) {
+        box = lastActiveComposer;
+      }
+    }
+
+    // Next, search within the explicit scope (button's own bubble).
+    if (!box && scope && document.contains(scope)) {
+      for (const sel of boxSelectors) {
+        box = scope.querySelector(sel);
+        if (box) break;
+      }
+    }
+
+    // Finally, fall back to the document-wide first match.
+    if (!box) {
+      for (const sel of boxSelectors) {
+        box = document.querySelector(sel);
+        if (box) break;
+      }
     }
 
     if (!box) {
@@ -1495,6 +1646,7 @@
     if (!location.hostname.includes('linkedin.com')) return;
     console.log('[OutreachPro DM] 🚀 Initializing AI DM Response Generator v2');
     injectDMStyles();
+    attachActiveScopeTracking();
 
     // Use waitForElement for initial injection (Auto Gmail pattern)
     const msgFormSelector = [
@@ -1529,6 +1681,8 @@
       if (location.href !== lastMsgUrl) {
         lastMsgUrl = location.href;
         injectionAttempts = 0;
+        // Drop any stale composer reference from the previous page/conv.
+        lastActiveComposer = null;
         // Clean up old buttons and panel
         document.querySelectorAll('.' + AI_BTN_CLASS).forEach(b => b.remove());
         if (aiPanel) { aiPanel.remove(); aiPanel = null; }
