@@ -1,10 +1,12 @@
 /**
- * OutreachPro — AI DM Response Generator
+ * OutreachPro — AI DM Response Generator v2
  *
- * Injects into LinkedIn messaging pages. Provides:
- *   1. "✨ AI Reply" button next to the message input
- *   2. Training Studio — teach the AI your desired DM outcomes
- *   3. Context-aware response generation from trained data
+ * Inspired by Auto Gmail's injection patterns:
+ *   • waitForElement with MutationObserver (not polling)
+ *   • Shadow DOM isolated UI (no CSS conflicts with LinkedIn)
+ *   • Robust multi-strategy button injection
+ *   • Context-aware conversation scraping
+ *   • React-compatible message box insertion
  *
  * 100% local — no API calls, no tokens, no limits.
  */
@@ -17,6 +19,34 @@
   let aiPanel = null;
   let observer = null;
   let lastMsgUrl = '';
+  let injectionAttempts = 0;
+  const MAX_INJECTION_ATTEMPTS = 50;
+
+  // ═══════════════════════════════════════════
+  //  0. WAIT-FOR-ELEMENT (Auto Gmail pattern)
+  //  Uses MutationObserver to resolve when a selector appears
+  // ═══════════════════════════════════════════
+  function waitForElement(selector, { timeout = 15000, parent = document.body } = {}) {
+    return new Promise((resolve, reject) => {
+      const el = parent.querySelector(selector);
+      if (el) return resolve(el);
+
+      const obs = new MutationObserver(() => {
+        const found = parent.querySelector(selector);
+        if (found) {
+          obs.disconnect();
+          resolve(found);
+        }
+      });
+
+      obs.observe(parent, { childList: true, subtree: true });
+
+      setTimeout(() => {
+        obs.disconnect();
+        reject(new Error(`waitForElement timeout: ${selector}`));
+      }, timeout);
+    });
+  }
 
   // ═══════════════════════════════════════════
   //  1. STYLES
@@ -40,14 +70,39 @@
         transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         z-index: 100; position: relative;
         animation: dm-ai-glow 3s ease-in-out infinite;
+        line-height: 1;
+        letter-spacing: 0.01em;
+        -webkit-font-smoothing: antialiased;
       }
       .${AI_BTN_CLASS}:hover {
         transform: translateY(-1px) scale(1.04);
         box-shadow: 0 4px 18px rgba(99, 102, 241, 0.5);
+        filter: brightness(1.1);
+      }
+      .${AI_BTN_CLASS}:active {
+        transform: translateY(0) scale(0.98);
       }
       @keyframes dm-ai-glow {
         0%, 100% { box-shadow: 0 2px 10px rgba(99,102,241,0.35); }
         50% { box-shadow: 0 4px 16px rgba(99,102,241,0.55); }
+      }
+      @keyframes dm-ai-sparkle {
+        0%, 100% { transform: scale(1) rotate(0deg); }
+        25% { transform: scale(1.2) rotate(-5deg); }
+        75% { transform: scale(1.1) rotate(5deg); }
+      }
+
+      /* Floating style variant */
+      .${AI_BTN_CLASS}.floating {
+        position: fixed !important;
+        bottom: 80px !important;
+        right: 30px !important;
+        z-index: 2147483640 !important;
+        height: 40px;
+        padding: 8px 18px;
+        font-size: 13px;
+        border-radius: 20px;
+        box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4), 0 2px 8px rgba(0,0,0,0.1);
       }
 
       #${PANEL_ID} {
@@ -94,206 +149,214 @@
         background: rgba(255,255,255,0.2); border: none; color: #fff;
         width: 26px; height: 26px; border-radius: 50%; cursor: pointer;
         font-size: 14px; display: flex; align-items: center; justify-content: center;
+        transition: background 0.2s;
       }
       .dm-ai-header-close:hover { background: rgba(255,255,255,0.35); }
 
       .dm-ai-tabs {
-        display: flex; border-bottom: 1px solid #f0f0f5; background: #fafafa;
+        display: flex; border-bottom: 1px solid rgba(0,0,0,0.06);
       }
       .dm-ai-tab {
-        flex: 1; padding: 10px 4px; font-size: 11px; font-weight: 600; text-align: center;
-        cursor: pointer; color: #888; border: none; border-bottom: 2px solid transparent;
-        background: none; font-family: inherit; transition: all 0.2s;
+        flex: 1; padding: 10px; text-align: center; font-size: 12px;
+        font-weight: 600; cursor: pointer; border: none; background: none;
+        color: #888; transition: all 0.2s; font-family: inherit;
+        position: relative;
+      }
+      .dm-ai-tab.active {
+        color: #6366F1;
+      }
+      .dm-ai-tab.active::after {
+        content: ''; position: absolute; bottom: -1px; left: 20%; right: 20%;
+        height: 2px; background: linear-gradient(90deg, #8B5CF6, #4F46E5); border-radius: 2px;
       }
       .dm-ai-tab:hover { color: #6366F1; background: rgba(99,102,241,0.04); }
-      .dm-ai-tab.active { color: #6366F1; border-bottom-color: #6366F1; }
 
       .dm-ai-body {
-        padding: 14px; flex: 1; overflow-y: auto; max-height: 340px;
+        padding: 14px 18px; flex: 1; overflow-y: auto;
+        scrollbar-width: thin; scrollbar-color: #d4d4d8 transparent;
       }
       .dm-ai-body textarea {
-        width: 100%; min-height: 100px; border: 1.5px solid #e8e8ed; border-radius: 10px;
-        padding: 12px; font-size: 12px; font-family: 'Inter', sans-serif; line-height: 1.6;
-        resize: vertical; outline: none; color: #1a1a2e; box-sizing: border-box;
+        width: 100%; border: 1px solid #e8e8ed; border-radius: 10px;
+        padding: 10px 12px; font-size: 13px; resize: vertical;
+        font-family: 'Inter', sans-serif; outline: none;
+        transition: border-color 0.2s, box-shadow 0.2s;
+        min-height: 100px;
       }
-      .dm-ai-body textarea:focus { border-color: #6366F1; box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
-
+      .dm-ai-body textarea:focus {
+        border-color: #8B5CF6; box-shadow: 0 0 0 3px rgba(139,92,246,0.12);
+      }
+      .dm-ai-context-box {
+        padding: 8px 10px; background: #f9f9fc; border-radius: 8px;
+        font-size: 12px; color: #666; border: 1px solid #eee;
+        line-height: 1.5; max-height: 60px; overflow-y: auto;
+      }
+      .dm-ai-outcome-select {
+        width: 100%; padding: 8px 10px; border: 1px solid #e8e8ed;
+        border-radius: 8px; font-size: 13px; font-family: 'Inter', sans-serif;
+        outline: none; background: #fff; cursor: pointer;
+        transition: border-color 0.2s;
+      }
+      .dm-ai-outcome-select:focus { border-color: #8B5CF6; }
       .dm-ai-actions {
-        display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid #f0f0f5;
-        align-items: center;
+        display: flex; align-items: center; gap: 8px; padding: 12px 18px;
+        border-top: 1px solid rgba(0,0,0,0.06);
       }
       .dm-ai-gen-btn {
-        display: inline-flex; align-items: center; gap: 5px; padding: 9px 16px;
-        font-size: 12px; font-weight: 600;
+        padding: 8px 18px; border: none; border-radius: 10px; font-size: 13px;
+        font-weight: 600; cursor: pointer; font-family: 'Inter', sans-serif;
         background: linear-gradient(135deg, #8B5CF6, #6366F1, #4F46E5);
-        color: #fff; border: none; border-radius: 10px; cursor: pointer;
-        font-family: inherit; box-shadow: 0 2px 8px rgba(99,102,241,0.3);
-        transition: all 0.25s;
+        color: #fff; box-shadow: 0 2px 10px rgba(99,102,241,0.3);
+        transition: transform 0.2s, box-shadow 0.2s, filter 0.2s;
       }
-      .dm-ai-gen-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(99,102,241,0.45); }
-
-      .dm-ai-insert-btn {
-        padding: 9px 14px; font-size: 12px; font-weight: 600;
-        background: #0077B5; color: #fff; border: none; border-radius: 10px;
-        cursor: pointer; font-family: inherit; transition: all 0.2s;
-      }
-      .dm-ai-insert-btn:hover { background: #005f91; }
-
+      .dm-ai-gen-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(99,102,241,0.4); filter: brightness(1.08); }
+      .dm-ai-gen-btn:active { transform: translateY(0); }
       .dm-ai-sec-btn {
-        padding: 9px 14px; font-size: 11px; font-weight: 500;
-        background: #fff; color: #666; border: 1.5px solid #e0e0e5; border-radius: 10px;
-        cursor: pointer; font-family: inherit; transition: all 0.2s;
+        padding: 8px 14px; border: 1px solid #e0e0e0; border-radius: 10px;
+        font-size: 12px; font-weight: 600; cursor: pointer; background: #fff;
+        color: #555; font-family: 'Inter', sans-serif;
+        transition: all 0.2s;
       }
-      .dm-ai-sec-btn:hover { border-color: #6366F1; color: #6366F1; }
-
+      .dm-ai-sec-btn:hover { border-color: #8B5CF6; color: #8B5CF6; background: rgba(139,92,246,0.04); }
+      .dm-ai-insert-btn {
+        padding: 8px 14px; border: none; border-radius: 10px;
+        font-size: 12px; font-weight: 600; cursor: pointer;
+        background: linear-gradient(135deg, #10B981, #059669);
+        color: #fff; font-family: 'Inter', sans-serif;
+        box-shadow: 0 2px 8px rgba(16,185,129,0.3);
+        transition: all 0.2s;
+      }
+      .dm-ai-insert-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(16,185,129,0.4); }
       .dm-ai-footer {
-        padding: 8px 14px; background: #fafafa; border-top: 1px solid #f0f0f5;
-        text-align: center; font-size: 10px; color: #bbb; border-radius: 0 0 16px 16px;
+        padding: 8px 18px; font-size: 10px; color: #999;
+        text-align: center; border-top: 1px solid rgba(0,0,0,0.04);
+        background: #fafafa;
       }
-      .dm-ai-footer .hl { color: #6366F1; font-weight: 700; }
+      .dm-ai-footer .hl { color: #6366F1; font-weight: 600; }
 
-      /* Profile cards (training) */
+      /* Skeleton loader */
+      .dm-ai-skel { height: 12px; margin: 8px 0; border-radius: 6px;
+        background: linear-gradient(90deg,#f0f0f4 25%,#e8e8ed 50%,#f0f0f4 75%);
+        background-size: 200% 100%; animation: dm-skel 1.5s infinite;
+      }
+      .dm-ai-skel.l { width: 100%; }
+      .dm-ai-skel.m { width: 70%; }
+      .dm-ai-skel.s { width: 40%; }
+      @keyframes dm-skel { from{background-position:200% 0}to{background-position:-200% 0} }
+
+      /* Profile cards */
       .dm-ai-profile-card {
-        padding: 12px; border: 1.5px solid #e8e8ed; border-radius: 10px;
-        margin-bottom: 10px; cursor: pointer; transition: all 0.2s;
-        background: #fff;
+        padding: 10px 12px; margin-bottom: 8px; border: 1px solid #eee;
+        border-radius: 10px; background: #fdfdfe; cursor: pointer;
+        transition: all 0.2s;
       }
-      .dm-ai-profile-card:hover { border-color: #6366F1; background: rgba(99,102,241,0.02); }
-      .dm-ai-profile-card.selected { border-color: #6366F1; background: rgba(99,102,241,0.06); }
-      .dm-ai-profile-card .pname { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
-      .dm-ai-profile-card .pdesc { font-size: 11px; color: #888; }
-      .dm-ai-profile-card .pcount { font-size: 10px; color: #6366F1; margin-top: 4px; font-weight: 600; }
+      .dm-ai-profile-card:hover { border-color: #c7c7f0; background: #f8f7ff; transform: translateX(2px); }
+      .dm-ai-profile-card .pname { font-size: 13px; font-weight: 600; }
+      .dm-ai-profile-card .pdesc { font-size: 11px; color: #888; margin-top: 2px; }
+      .dm-ai-profile-card .pcount { font-size: 10px; color: #aaa; margin-top: 4px; }
 
-      .dm-ai-training-input {
-        width: 100%; padding: 10px; border: 1.5px solid #e8e8ed; border-radius: 8px;
-        font-size: 12px; font-family: 'Inter', sans-serif; outline: none;
-        box-sizing: border-box; margin-bottom: 8px;
-      }
-      .dm-ai-training-input:focus { border-color: #6366F1; box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
-
+      /* Example pairs */
       .dm-ai-example-pair {
-        padding: 10px; background: #f9f9fc; border-radius: 8px; margin-bottom: 8px;
-        border-left: 3px solid #6366F1;
+        padding: 8px; margin-bottom: 6px; border: 1px solid #eee;
+        border-radius: 8px; background: #fafafa; position: relative;
       }
-      .dm-ai-example-pair .ex-label { font-size: 10px; font-weight: 700; color: #6366F1; text-transform: uppercase; margin-bottom: 4px; }
-      .dm-ai-example-pair .ex-text { font-size: 11px; color: #555; line-height: 1.5; }
       .dm-ai-example-pair .ex-del {
-        float: right; background: none; border: none; color: #EF4444; cursor: pointer;
-        font-size: 10px; font-weight: 600; font-family: inherit;
+        position: absolute; top: 6px; right: 6px; font-size: 9px;
+        color: #EF4444; background: none; border: none; cursor: pointer;
+        font-weight: 600; font-family: inherit;
       }
-      .dm-ai-example-pair .ex-del:hover { text-decoration: underline; }
+      .dm-ai-example-pair .ex-label { font-size: 10px; font-weight: 700; color: #777; }
+      .dm-ai-example-pair .ex-text { font-size: 12px; color: #333; margin-top: 2px; }
 
-      .dm-ai-context-box {
-        background: #f4f3ff; border: 1px solid #e0deff; border-radius: 10px;
-        padding: 10px; margin-bottom: 12px; font-size: 11px; color: #555; line-height: 1.5;
-        max-height: 80px; overflow-y: auto;
+      /* Training input */
+      .dm-ai-training-input {
+        width: 100%; padding: 8px 10px; border: 1px solid #e0e0e5;
+        border-radius: 8px; font-size: 12px; font-family: 'Inter', sans-serif;
+        outline: none; margin-bottom: 8px; box-sizing: border-box;
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+      .dm-ai-training-input:focus {
+        border-color: #8B5CF6; box-shadow: 0 0 0 3px rgba(139,92,246,0.1);
       }
 
-      .dm-ai-skel {
-        background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
-        background-size: 200% 100%; animation: dm-shimmer 1.5s infinite;
-        border-radius: 6px; height: 13px; margin-bottom: 7px;
-      }
-      .dm-ai-skel.s { width: 60%; } .dm-ai-skel.m { width: 80%; } .dm-ai-skel.l { width: 95%; }
-      @keyframes dm-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
-
+      /* Toast */
       .dm-ai-toast {
-        position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-        background: #1a1a2e; color: #fff; padding: 10px 22px; border-radius: 10px;
-        font-size: 12px; font-family: 'Inter', sans-serif; z-index: 2147483642;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.3); animation: dm-toast-in 0.3s ease;
+        position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+        padding: 10px 20px; border-radius: 10px; font-size: 13px;
+        font-family: 'Inter', sans-serif; color: #fff; z-index: 2147483647;
+        background: #333; box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        animation: dm-toast-in 0.3s cubic-bezier(0.34,1.56,0.64,1);
+        pointer-events: none;
       }
-      .dm-ai-toast.success { background: #10B981; }
-      .dm-ai-toast.error { background: #EF4444; }
-      @keyframes dm-toast-in {
-        from { opacity: 0; transform: translateX(-50%) translateY(10px); }
-        to { opacity: 1; transform: translateX(-50%) translateY(0); }
-      }
-
-      /* Outcome select dropdown */
-      .dm-ai-outcome-select {
-        width: 100%; padding: 8px 10px; border: 1.5px solid #e8e8ed; border-radius: 8px;
-        font-size: 12px; font-family: 'Inter', sans-serif; outline: none;
-        margin-bottom: 10px; box-sizing: border-box; cursor: pointer;
-        background: #fff; color: #333;
-      }
-      .dm-ai-outcome-select:focus { border-color: #6366F1; }
+      .dm-ai-toast.success { background: linear-gradient(135deg, #10B981, #059669); }
+      .dm-ai-toast.error { background: linear-gradient(135deg, #EF4444, #DC2626); }
+      @keyframes dm-toast-in { from{opacity:0;transform:translateX(-50%) translateY(10px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
     `;
     document.head.appendChild(style);
   }
 
   // ═══════════════════════════════════════════
-  //  2. TRAINING DATA CRUD
+  //  2. TRAINING PROFILES (local storage)
   // ═══════════════════════════════════════════
-  function getProfiles() {
+  const DEFAULT_PROFILES = [
+    {
+      id: 'book_meeting',
+      name: '📅 Book a Meeting',
+      description: 'Guide conversation toward scheduling a call',
+      tone: 'professional',
+      examples: [
+        { inbound: "Thanks for reaching out! What exactly does your platform do?",
+          response: "Great question! We help companies like yours streamline their recruitment pipeline by 3x. I'd love to walk you through a quick 15-min demo — would Thursday or Friday work better for you?" },
+        { inbound: "Sounds interesting, but I'm pretty busy right now.",
+          response: "Totally understand — I know how hectic things can get! How about we pencil in a brief 10-minute chat next week? I promise it'll be worth your time. What day works best?" },
+      ]
+    },
+    {
+      id: 'build_rapport',
+      name: '🤝 Build Rapport',
+      description: 'Establish a genuine connection with the person',
+      tone: 'casual',
+      examples: [
+        { inbound: "Hey, thanks for connecting!",
+          response: "Likewise! I've been following your work at [Company] — really impressive stuff with the product launch last quarter. Would love to hear more about what you're working on next!" },
+      ]
+    },
+    {
+      id: 'close_deal',
+      name: '💼 Close / Pitch',
+      description: 'Move toward a commitment or next step',
+      tone: 'professional',
+      examples: [
+        { inbound: "We've been considering a few options.",
+          response: "Completely understand — it's a big decision! What I can share is that our clients typically see ROI within the first 30 days. Happy to connect you with a reference in your industry. Would that help with evaluating?" },
+      ]
+    },
+    {
+      id: 'cold_outreach',
+      name: '❄️ Cold Outreach',
+      description: 'Initiate contact with someone new',
+      tone: 'witty',
+      examples: [
+        { inbound: "",
+          response: "Hi [Name]! I came across your profile and was genuinely impressed by your work in [field]. I'm working on something that could be a perfect fit — mind if I share a quick overview?" },
+      ]
+    },
+  ];
+
+  async function getProfiles() {
     return new Promise(resolve => {
       chrome.storage.local.get(TRAINING_KEY, r => {
-        resolve(r[TRAINING_KEY] || getDefaultProfiles());
+        const profiles = r[TRAINING_KEY];
+        if (profiles && profiles.length > 0) return resolve(profiles);
+        // First time — seed defaults
+        chrome.storage.local.set({ [TRAINING_KEY]: DEFAULT_PROFILES }, () => resolve(DEFAULT_PROFILES));
       });
     });
   }
 
-  function saveProfiles(profiles) {
+  async function saveProfiles(profiles) {
     return new Promise(resolve => {
       chrome.storage.local.set({ [TRAINING_KEY]: profiles }, resolve);
     });
-  }
-
-  function getDefaultProfiles() {
-    return [
-      {
-        id: 'book_meeting',
-        name: '📅 Book a Meeting',
-        description: 'Guide the conversation toward scheduling a call or meeting',
-        tone: 'professional',
-        examples: [
-          {
-            inbound: "Hey, thanks for connecting! What do you do?",
-            response: "Great connecting with you! I help companies streamline their outreach processes. I'd love to learn more about what you're working on — would you have 15 minutes this week for a quick chat?"
-          },
-          {
-            inbound: "Sounds interesting, tell me more",
-            response: "Happy to! In a nutshell, I help teams save 10+ hours per week on prospecting. I find a short call is the best way to see if there's a fit. How does Thursday or Friday look for you?"
-          }
-        ],
-      },
-      {
-        id: 'pitch_service',
-        name: '🎯 Pitch Service',
-        description: 'Present your service/product in a compelling, non-pushy way',
-        tone: 'casual',
-        examples: [
-          {
-            inbound: "What exactly does your company offer?",
-            response: "Great question! We built a tool that automates LinkedIn outreach while keeping it personal. Most of our clients see 3x more responses. Want me to send you a quick demo link?"
-          }
-        ],
-      },
-      {
-        id: 'warm_followup',
-        name: '🔄 Warm Follow-up',
-        description: 'Re-engage a conversation that went cold',
-        tone: 'enthusiastic',
-        examples: [
-          {
-            inbound: "",
-            response: "Hey! Hope you've been doing well since we last chatted. I've been thinking about our conversation and figured I'd check back in. Have things changed on your end regarding [topic]? No pressure at all!"
-          }
-        ],
-      },
-      {
-        id: 'network_build',
-        name: '🤝 Build Network',
-        description: 'Nurture genuine professional relationships',
-        tone: 'casual',
-        examples: [
-          {
-            inbound: "Thanks for the connection!",
-            response: "Of course! I love connecting with people in our space. What's been keeping you busy lately? Always looking to share insights and learn from others in the field."
-          }
-        ],
-      },
-    ];
   }
 
   // ═══════════════════════════════════════════
@@ -301,389 +364,141 @@
   // ═══════════════════════════════════════════
   function scrapeConversation() {
     const messages = [];
-
-    // LinkedIn message thread selectors
+    // LinkedIn messaging selectors — try multiple in case of DOM updates
     const msgSelectors = [
-      '.msg-s-event-listitem',
-      '.msg-s-message-list__event',
-      '.msg-s-message-group__meta',
       '.msg-s-event-listitem__body',
+      '.msg-s-message-list__event',
+      'li.msg-s-message-list__event',
+      '.msg-s-event-listitem',
+      'div[class*="msg-s-event-listitem"]',
+      'div[class*="message-event"]',
+      '.msg-s-message-group__msg',
     ];
 
-    // Try to find message elements
     let msgElements = [];
     for (const sel of msgSelectors) {
       msgElements = document.querySelectorAll(sel);
       if (msgElements.length > 0) break;
     }
 
-    // Extract text from each message
     msgElements.forEach(el => {
-      const bodyEl = el.querySelector('.msg-s-event-listitem__body, .msg-s-event__content, p');
-      const senderEl = el.querySelector('.msg-s-message-group__name, .msg-s-event-listitem__name, .msg-s-message-group__profile-link');
-      if (bodyEl) {
+      const textEl = el.querySelector('.msg-s-event-listitem__body, .msg-s-event__content, p, span[class*="message"]');
+      const senderEl = el.querySelector('.msg-s-message-group__name, .msg-s-message-group__profile-link, span[class*="sender"]');
+      if (textEl) {
         messages.push({
-          text: bodyEl.textContent.trim(),
+          text: textEl.textContent.trim(),
           sender: senderEl ? senderEl.textContent.trim() : 'Unknown',
           isMe: !!el.querySelector('.msg-s-event-listitem--other') === false,
         });
       }
     });
 
-    // Fallback: try broader selectors
-    if (messages.length === 0) {
-      const allMsgBodies = document.querySelectorAll(
-        '.msg-s-event-listitem__body p, ' +
-        '.msg-s-message-list-content .msg-s-event-listitem p, ' +
-        '[class*="msg-s-event"] p'
-      );
-      allMsgBodies.forEach(p => {
-        const text = p.textContent.trim();
-        if (text.length > 0) {
-          messages.push({ text, sender: 'Contact', isMe: false });
-        }
-      });
-    }
-
     // Get conversation partner name
-    let partnerName = '';
-    const nameSelectors = [
-      '.msg-overlay-bubble-header__title',
-      '.msg-thread__link-to-profile',
-      '.msg-entity-lockup__entity-title',
-      '.msg-s-message-list__name-link',
-      'h2.msg-overlay-bubble-header__title',
-    ];
-    for (const sel of nameSelectors) {
-      const el = document.querySelector(sel);
-      if (el && el.textContent.trim()) {
-        partnerName = el.textContent.trim();
-        break;
-      }
-    }
+    const partnerNameEl = document.querySelector(
+      '.msg-overlay-bubble-header__title, ' +
+      '.msg-conversation-card__participant-names, ' +
+      '.msg-thread__title-text, ' +
+      'h2[class*="msg-overlay-bubble-header"], ' +
+      'h2[class*="conversation-title"]'
+    );
 
     return {
-      messages: messages.slice(-10), // last 10 messages for context
-      partnerName,
+      messages: messages.slice(-10), // Last 10 messages
       lastMessage: messages.length > 0 ? messages[messages.length - 1] : null,
+      partnerName: partnerNameEl ? partnerNameEl.textContent.trim() : 'there',
     };
   }
 
   // ═══════════════════════════════════════════
-  //  4. RESPONSE GENERATION ENGINE (Enhanced)
+  //  4. AI ENGINE — Local Response Generator
   // ═══════════════════════════════════════════
-  function pick(arr) {
-    return arr[Math.floor(Math.random() * arr.length)];
-  }
+  function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
-  // ── Stop words for content analysis ──
-  const STOP_WORDS = new Set(['the', 'a', 'an', 'is', 'are', 'was', 'were', 'do', 'does', 'did',
-    'have', 'has', 'had', 'i', 'you', 'we', 'they', 'he', 'she', 'it', 'my', 'your', 'our',
-    'their', 'this', 'that', 'what', 'how', 'when', 'where', 'who', 'why', 'and', 'or', 'but',
-    'in', 'on', 'at', 'to', 'for', 'of', 'with', 'about', 'be', 'been', 'being', 'not', 'so',
-    'if', 'can', 'will', 'would', 'could', 'just', 'more', 'also', 'very', 'much', 'some',
-    'any', 'me', 'up', 'out', 'get', 'got', 'let', 'know', 'think', 'like', 'really',
-    'thanks', 'thank', 'hi', 'hey', 'hello', 'yes', 'no', 'ok', 'okay', 'sure', 'well',
-    'then', 'now', 'here', 'there', 'been', 'had', 'its', 'than', 'too', 'only', 'into',
-    'over', 'after', 'before', 'between', 'each', 'few', 'those', 'such', 'own', 'same',
-    'other', 'most', 'through']);
-
-  /**
-   * Tokenize text into meaningful content words (lowercase, no stop words, min length 3)
-   */
-  function tokenize(text) {
-    if (!text) return [];
-    return text.toLowerCase()
-      .replace(/[^\w\s]/g, ' ')
-      .split(/\s+/)
-      .filter(w => w.length > 2 && !STOP_WORDS.has(w));
-  }
-
-  /**
-   * TF-IDF-like weighted similarity between two texts.
-   * Weights rare/longer words higher than common short ones.
-   */
-  function weightedSimilarity(textA, textB) {
-    if (!textA || !textB) return 0;
-    const tokensA = tokenize(textA);
-    const tokensB = tokenize(textB);
-    if (tokensA.length === 0 || tokensB.length === 0) return 0;
-
-    const setB = new Set(tokensB);
-    let weightedMatches = 0;
-    let totalWeight = 0;
-
-    for (const w of tokensA) {
-      // Longer words are weighted higher (proxy for specificity)
-      const weight = Math.min(w.length / 4, 2.5);
-      totalWeight += weight;
-      if (setB.has(w)) {
-        weightedMatches += weight;
-      }
+  function generateResponse(profile, conversation) {
+    if (!profile || !profile.examples || profile.examples.length === 0) {
+      return `Hi ${conversation.partnerName}!\n\nThanks for your message. I'd love to continue this conversation and explore how we can work together.\n\nLooking forward to hearing from you!`;
     }
 
-    // Also check bigrams (consecutive word pairs) for phrase matching
-    for (let i = 0; i < tokensA.length - 1; i++) {
-      const bigram = tokensA[i] + ' ' + tokensA[i + 1];
-      const textBLower = textB.toLowerCase();
-      if (textBLower.includes(bigram)) {
-        weightedMatches += 2; // bigram match is a strong signal
-        totalWeight += 2;
-      }
-    }
+    const lastMsg = conversation.lastMessage;
+    const partnerName = conversation.partnerName || 'there';
 
-    return totalWeight > 0 ? weightedMatches / totalWeight : 0;
-  }
-
-  /**
-   * Detect the intent category of a message to improve matching.
-   */
-  function detectIntent(text) {
-    if (!text) return 'cold';
-    const lower = text.toLowerCase();
-
-    if (/\?/.test(lower)) return 'question';
-    if (/thank|appreciate|great|awesome|cool|nice|perfect/.test(lower)) return 'positive';
-    if (/not interested|no thanks|pass|busy|unsubscribe|stop/.test(lower)) return 'objection';
-    if (/tell me more|interested|sounds|curious|how does|what does/.test(lower)) return 'interest';
-    if (/hi|hey|hello|connecting|thanks for connect/.test(lower)) return 'greeting';
-    if (/schedule|call|meet|chat|zoom|calendar|time/.test(lower)) return 'scheduling';
-    return 'general';
-  }
-
-  /**
-   * Build a context summary from the full conversation history.
-   */
-  function buildConversationContext(conversation) {
-    const ctx = {
-      messageCount: conversation.messages.length,
-      partnerName: conversation.partnerName || '',
-      firstName: (conversation.partnerName || '').split(' ')[0] || '',
-      lastMessage: conversation.lastMessage?.text || '',
-      lastIntent: detectIntent(conversation.lastMessage?.text || ''),
-      topics: [],
-      conversationFlow: [],
-      isFirstMessage: conversation.messages.length <= 1,
-    };
-
-    // Extract topics from all messages
-    const allText = conversation.messages.map(m => m.text).join(' ');
-    ctx.topics = extractTopics(allText);
-
-    // Build conversation flow (who said what, summarized)
-    ctx.conversationFlow = conversation.messages.slice(-5).map(m => ({
-      sender: m.isMe ? 'me' : 'them',
-      intent: detectIntent(m.text),
-      preview: m.text.substring(0, 80),
-    }));
-
-    return ctx;
-  }
-
-  /**
-   * Extract key topics/phrases from text using frequency analysis.
-   */
-  function extractTopics(text) {
-    if (!text) return [];
-    const tokens = tokenize(text);
-    const freq = {};
-    tokens.forEach(w => { freq[w] = (freq[w] || 0) + 1; });
-
-    // Sort by frequency × word length (longer frequent words = key topics)
-    return Object.entries(freq)
-      .map(([word, count]) => ({ word, score: count * Math.min(word.length / 4, 2) }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 5)
-      .map(t => t.word);
-  }
-
-  function extractTopic(text) {
-    const topics = extractTopics(text);
-    return topics.slice(0, 3).join(' ') || '';
-  }
-
-  /**
-   * Score each training example against the conversation context.
-   * Uses multiple signals: text similarity, intent match, topic overlap.
-   */
-  function scoreExamples(profile, context) {
-    const scores = [];
+    // Intent detection
+    const inboundText = lastMsg ? lastMsg.text.toLowerCase() : '';
+    let bestMatch = profile.examples[0];
+    let bestScore = -1;
 
     for (const ex of profile.examples) {
+      if (!ex.inbound && !lastMsg) { bestMatch = ex; bestScore = 100; break; }
+      if (!ex.inbound || !lastMsg) continue;
+
+      const exWords = ex.inbound.toLowerCase().split(/\s+/);
+      const inWords = inboundText.split(/\s+/);
       let score = 0;
+      for (const w of exWords) {
+        if (w.length > 3 && inWords.some(iw => iw.includes(w) || w.includes(iw))) score++;
+      }
+      // Sentiment matching
+      const questionMarks = (inboundText.match(/\?/g) || []).length;
+      const exQuestions = (ex.inbound.toLowerCase().match(/\?/g) || []).length;
+      if (questionMarks > 0 && exQuestions > 0) score += 2;
+      if (inboundText.length < 50 && ex.inbound.length < 50) score += 1;
 
-      // Signal 1: Text similarity between last message and example inbound (0-1)
-      const textSim = weightedSimilarity(context.lastMessage, ex.inbound);
-      score += textSim * 5; // weight: 5x
-
-      // Signal 2: Intent match (0 or 2)
-      const exIntent = detectIntent(ex.inbound);
-      if (exIntent === context.lastIntent) score += 2;
-
-      // Signal 3: Cold outreach match
-      if (!ex.inbound && context.isFirstMessage) score += 3;
-      if (!ex.inbound && !context.lastMessage) score += 4;
-
-      // Signal 4: Topic overlap with conversation history
-      const exTopics = extractTopics(ex.inbound + ' ' + ex.response);
-      const overlap = exTopics.filter(t => context.topics.includes(t)).length;
-      score += overlap * 0.5;
-
-      scores.push({ example: ex, score, textSim, intentMatch: exIntent === context.lastIntent });
+      if (score > bestScore) { bestScore = score; bestMatch = ex; }
     }
 
-    return scores.sort((a, b) => b.score - a.score);
-  }
-
-  /**
-   * Blend elements from multiple close-scoring examples to create a richer response.
-   */
-  function blendResponses(scoredExamples, context, profile) {
-    if (scoredExamples.length === 0) {
-      return "Thanks for reaching out! I'd love to learn more about what you're working on.";
-    }
-
-    const best = scoredExamples[0];
-
-    // If only one example or big gap, use the best one directly
-    if (scoredExamples.length === 1 || (scoredExamples.length > 1 && best.score - scoredExamples[1].score > 3)) {
-      return best.example.response;
-    }
-
-    // Find close contenders (within 30% of best score)
-    const threshold = best.score * 0.7;
-    const contenders = scoredExamples.filter(s => s.score >= threshold).slice(0, 3);
-
-    if (contenders.length <= 1) {
-      return best.example.response;
-    }
-
-    // Blend: use primary response structure, but weave in elements from runner-up
-    let primary = best.example.response;
-    const secondary = contenders[1].example.response;
-
-    // Extract sentences
-    const primarySentences = primary.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 10);
-    const secondarySentences = secondary.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 10);
-
-    // If secondary has a unique closing/CTA, consider swapping the ending
-    if (secondarySentences.length > 1 && primarySentences.length > 1 && Math.random() > 0.5) {
-      const lastSecondary = secondarySentences[secondarySentences.length - 1];
-      // Only blend if the secondary ending is a question or CTA
-      if (/\?|would you|how does|shall we|can we|let's|want me/.test(lastSecondary.toLowerCase())) {
-        primarySentences[primarySentences.length - 1] = lastSecondary;
-        primary = primarySentences.join(' ');
+    // Blend multiple examples
+    let base = bestMatch.response;
+    if (profile.examples.length > 1 && Math.random() > 0.4) {
+      const other = profile.examples.filter(e => e !== bestMatch);
+      const secondary = pick(other);
+      if (secondary.response) {
+        const sentences = secondary.response.split(/[.!?]+/).filter(s => s.trim().length > 10);
+        if (sentences.length > 0) {
+          const bonus = pick(sentences).trim();
+          base = base.replace(/\n\n/g, `\n\n${bonus}. `);
+        }
       }
     }
 
-    return primary;
-  }
+    // Personalize
+    let response = base
+      .replace(/\[Name\]/gi, partnerName.split(' ')[0])
+      .replace(/\[Company\]/gi, 'your company')
+      .replace(/\[field\]/gi, 'your field');
 
-  /**
-   * Main generation function — uses context scoring, blending, and variation.
-   */
-  function generateResponse(profile, conversation) {
-    const context = buildConversationContext(conversation);
+    // Apply tone variations
+    response = applyToneVariations(response, profile.tone);
 
-    // Score all training examples
-    const scored = scoreExamples(profile, context);
-
-    // Blend top responses
-    let response = blendResponses(scored, context, profile);
-
-    // Variable substitution
-    response = response
-      .replace(/\{name\}/gi, context.firstName || 'there')
-      .replace(/\{firstName\}/gi, context.firstName || 'there')
-      .replace(/\{partner\}/gi, context.partnerName || 'there')
-      .replace(/\[topic\]/gi, context.topics.slice(0, 2).join(' ') || 'our earlier discussion')
-      .replace(/\[their topic\]/gi, context.topics.slice(0, 2).join(' ') || 'your work');
-
-    // Add variation to avoid identical responses
-    response = addVariation(response, profile.tone);
-
-    // Context-aware adjustments based on conversation flow
-    response = applyContextAdjustments(response, context, profile.tone);
-
-    // Add greeting if missing and we know their name
-    if (context.firstName && !/^(hey|hi|hello)/i.test(response)) {
+    // Add greeting if missing
+    if (!/^(hi|hey|hello|dear|good)/i.test(response.trim())) {
       const greetings = {
-        professional: [`Hi ${context.firstName},`, `Hello ${context.firstName},`],
-        casual: [`Hey ${context.firstName}!`, `Hi ${context.firstName}!`],
-        enthusiastic: [`Hey ${context.firstName}! 🙌`, `Hi ${context.firstName}! 😊`],
-        witty: [`Hey ${context.firstName}!`, `Hi there ${context.firstName}!`],
+        professional: [`Hi ${partnerName.split(' ')[0]},`, `Hello ${partnerName.split(' ')[0]},`],
+        casual: [`Hey ${partnerName.split(' ')[0]}!`, `Hi ${partnerName.split(' ')[0]}!`],
+        enthusiastic: [`Hey ${partnerName.split(' ')[0]}! 😊`, `Hi there ${partnerName.split(' ')[0]}!`],
+        witty: [`Hey ${partnerName.split(' ')[0]}!`, `Hi ${partnerName.split(' ')[0]} —`],
       };
-      const greeting = pick(greetings[profile.tone] || greetings.professional);
-      response = `${greeting} ${response}`;
+      response = pick(greetings[profile.tone] || greetings.professional) + '\n\n' + response;
     }
 
     return response;
   }
 
-  /**
-   * Apply context-aware adjustments based on conversation flow.
-   */
-  function applyContextAdjustments(response, context, tone) {
-    // If they asked a question, make sure we're answering (not just pitching)
-    if (context.lastIntent === 'question' && !/^(great question|good question|absolutely)/i.test(response)) {
-      const questionAcks = {
-        professional: pick(["Great question! ", "Good question — ", "That's a great point. "]),
-        casual: pick(["Oh good question! ", "Glad you asked! ", ""]),
-        enthusiastic: pick(["Love that question! ", "Great question! 🎯 ", "Oh I'm glad you asked! "]),
-        witty: pick(["Ah, the million-dollar question! ", "Good one! ", ""]),
-      };
-      const ack = questionAcks[tone] || '';
-      if (ack && Math.random() > 0.4) {
-        response = ack + response.charAt(0).toLowerCase() + response.slice(1);
-      }
-    }
-
-    // If they expressed positive sentiment, acknowledge it
-    if (context.lastIntent === 'positive' && !/^(thanks|glad|appreciate)/i.test(response)) {
-      const positiveAcks = {
-        professional: pick(["Appreciate that! ", "Thank you! ", ""]),
-        casual: pick(["Awesome! ", "Thanks! ", "Glad to hear! "]),
-        enthusiastic: pick(["That's great to hear! 🙏 ", "Appreciate the kind words! ", "Thanks so much! 😊 "]),
-        witty: pick(["You're making my day! ", "Appreciate it! ", ""]),
-      };
-      const ack = positiveAcks[tone] || '';
-      if (ack && Math.random() > 0.4) {
-        response = ack + response;
-      }
-    }
-
-    // If this is a follow-up (multiple messages exchanged), skip intro-style openers
-    if (context.messageCount > 3) {
-      response = response
-        .replace(/^(I noticed your|I came across your|I saw your)\s/i, '')
-        .replace(/^(Thanks for connecting!?\s*)/i, '');
-    }
-
-    return response;
-  }
-
-  function addVariation(text, tone) {
-    // Rich sentence rephrasing for variety
+  function applyToneVariations(text, tone) {
     const variations = {
       professional: [
-        [/I'd love to/gi, () => pick(["I'd welcome the chance to", "I'd be happy to", "I'd enjoy the opportunity to", "It would be great to"])],
-        [/Let me know/gi, () => pick(["Please let me know", "Feel free to share", "I'd appreciate hearing", "I'm curious to hear"])],
-        [/I believe/gi, () => pick(["I'm confident", "I think", "I sense", "It seems like"])],
-        [/Would you be interested/gi, () => pick(["Would you be open to", "How would you feel about", "Would it make sense to"])],
-        [/I'd like to/gi, () => pick(["I'd be keen to", "I'm hoping to", "I'd welcome the chance to"])],
+        [/I'd love to/gi, () => pick(["I would be glad to", "I'd welcome the opportunity to", "I'd be pleased to"])],
+        [/Let me know/gi, () => pick(["Please don't hesitate to reach out", "I look forward to hearing from you", "Feel free to share your thoughts"])],
+        [/I believe/gi, () => pick(["I'm confident", "Based on my experience,", "I'm certain"])],
       ],
       casual: [
-        [/I'd love to/gi, () => pick(["Would love to", "I'm keen to", "I'd be down to", "Totally want to"])],
-        [/Let me know/gi, () => pick(["Hit me up", "Drop me a line", "Shoot me a message", "Give me a shout"])],
-        [/I believe/gi, () => pick(["I reckon", "I think", "Pretty sure", "I feel like"])],
-        [/Would you be interested/gi, () => pick(["Wanna", "Down to", "Fancy", "Up for"])],
+        [/I'd love to/gi, () => pick(["I'd really like to", "I'm keen to", "Would love to"])],
+        [/Let me know/gi, () => pick(["Drop me a line", "Hit me up", "Shoot me a message"])],
         [/I'd like to/gi, () => pick(["Wanna", "I'm looking to", "Hoping to"])],
       ],
       enthusiastic: [
         [/I'd love to/gi, () => pick(["I'd absolutely love to", "I'm so excited to", "Can't wait to", "I'd be thrilled to"])],
         [/Let me know/gi, () => pick(["Please let me know!", "I'm all ears!", "Would love to hear from you!", "Can't wait to hear back!"])],
         [/I believe/gi, () => pick(["I truly believe", "I'm convinced", "I'm so confident"])],
-        [/Would you be interested/gi, () => pick(["How amazing would it be to", "Would you love to", "How cool would it be to"])],
       ],
       witty: [
         [/I'd love to/gi, () => pick(["I'd genuinely love to", "Count me in to", "I'm all in for", "Sign me up to"])],
@@ -694,122 +509,147 @@
 
     const rules = variations[tone] || variations.professional;
     for (const [pattern, replacer] of rules) {
-      if (Math.random() > 0.45) { // ~55% chance to apply each variation
+      if (Math.random() > 0.45) {
         text = text.replace(pattern, replacer);
       }
     }
-
     return text;
   }
 
   // ═══════════════════════════════════════════
   //  5. UI — AI REPLY BUTTON INJECTION
+  //  Multi-strategy with Auto Gmail-style waitForElement
   // ═══════════════════════════════════════════
-  function injectAIReplyButton() {
-    // Don't inject on non-messaging pages
-    if (!isOnMessagingPage()) return;
-    // Already injected
-    if (document.querySelector('.' + AI_BTN_CLASS)) return;
-
+  function createAIButton() {
     const btn = document.createElement('button');
     btn.className = AI_BTN_CLASS;
-    btn.innerHTML = '<span style="animation:dm-ai-glow 2s ease-in-out infinite;display:inline-flex">✨</span><span>AI Reply</span>';
+    btn.innerHTML = '<span style="animation:dm-ai-sparkle 2s ease-in-out infinite;display:inline-flex">✨</span><span>AI Reply</span>';
     btn.title = 'Generate AI-powered reply based on your training data';
-
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
       toggleAIPanel();
     });
+    return btn;
+  }
 
-    // Strategy 1: Try to find a toolbar/form area to prepend to
-    const toolbarSelectors = [
+  async function injectAIReplyButton() {
+    if (!isOnMessagingPage()) return;
+    if (document.querySelector('.' + AI_BTN_CLASS)) return;
+
+    injectionAttempts++;
+    console.log(`[OutreachPro DM] Injection attempt ${injectionAttempts}...`);
+
+    const btn = createAIButton();
+
+    // ─── Strategy 1: LinkedIn msg-form footer (most reliable) ───
+    const footerSelectors = [
       '.msg-form__footer',
       '.msg-form__left-actions',
-      '.msg-form__content-container',
-      '.msg-overlay-conversation-bubble__action-bar',
-      '.msg-form__msg-content-container',
-      'form.msg-form',
-      'footer[class*="msg-form"]',
       'div[class*="msg-form__footer"]',
       'div[class*="msg-form__left"]',
     ];
 
-    let toolbar = null;
-    for (const sel of toolbarSelectors) {
-      toolbar = document.querySelector(sel);
-      if (toolbar) break;
-    }
-
-    if (toolbar) {
-      toolbar.prepend(btn);
-      console.log('[OutreachPro DM] AI Reply button injected into toolbar');
-      return;
-    }
-
-    // Strategy 2: Find the Send button and place next to it
-    const sendBtn = document.querySelector(
-      'button.msg-form__send-button, ' +
-      'button[type="submit"][class*="msg-form"], ' +
-      'button.msg-form__send-btn'
-    );
-    if (sendBtn && sendBtn.parentElement) {
-      sendBtn.parentElement.prepend(btn);
-      console.log('[OutreachPro DM] AI Reply button injected near Send button');
-      return;
-    }
-
-    // Strategy 3: Find ANY button with "Send" text in messaging area
-    const allButtons = document.querySelectorAll('button');
-    for (const b of allButtons) {
-      if (b.textContent.trim() === 'Send' && b.closest('[class*="msg"]')) {
-        b.parentElement.insertBefore(btn, b);
-        console.log('[OutreachPro DM] AI Reply button injected near Send text button');
+    for (const sel of footerSelectors) {
+      const footer = document.querySelector(sel);
+      if (footer) {
+        footer.prepend(btn);
+        console.log('[OutreachPro DM] ✅ Injected into footer:', sel);
         return;
       }
     }
 
-    // Strategy 4: Find contenteditable (message input) and insert near it
-    const msgInput = document.querySelector(
-      'div[role="textbox"][contenteditable="true"], ' +
-      '.msg-form__contenteditable, ' +
-      'div[contenteditable="true"][class*="msg"], ' +
-      'div[data-placeholder="Write a message…"], ' +
-      'div[data-placeholder="Write a message..."]'
-    );
-    if (msgInput) {
-      // Walk up to find a container we can append to
-      let container = msgInput.parentElement;
-      for (let i = 0; i < 5 && container; i++) {
-        if (container.querySelector('button')) {
-          container.prepend(btn);
-          console.log('[OutreachPro DM] AI Reply button injected near message input');
-          return;
-        }
-        container = container.parentElement;
+    // ─── Strategy 2: Next to Send button ───
+    const sendSelectors = [
+      'button.msg-form__send-button',
+      'button[type="submit"][class*="msg-form"]',
+      'button.msg-form__send-btn',
+    ];
+    for (const sel of sendSelectors) {
+      const sendBtn = document.querySelector(sel);
+      if (sendBtn && sendBtn.parentElement) {
+        sendBtn.parentElement.prepend(btn);
+        console.log('[OutreachPro DM] ✅ Injected near Send button:', sel);
+        return;
       }
     }
 
-    // Strategy 5: Ultimate fallback — floating button in bottom-right of messaging area
-    const msgArea = document.querySelector(
-      '.msg-thread, ' +
-      '.msg-s-message-list-container, ' +
-      'div[class*="messaging"], ' +
-      'main[class*="scaffold"]'
-    );
-    if (msgArea || isOnMessagingPage()) {
-      btn.style.cssText += 'position:fixed;bottom:80px;right:30px;z-index:9999;';
+    // ─── Strategy 3: Any "Send" text button in msg context ───
+    const allButtons = document.querySelectorAll('button');
+    for (const b of allButtons) {
+      const txt = b.textContent.trim().toLowerCase();
+      if ((txt === 'send' || txt === 'send message') && b.closest('[class*="msg"]')) {
+        b.parentElement.insertBefore(btn, b);
+        console.log('[OutreachPro DM] ✅ Injected near "Send" text button');
+        return;
+      }
+    }
+
+    // ─── Strategy 4: Near contenteditable message input ───
+    const inputSelectors = [
+      'div[role="textbox"][contenteditable="true"]',
+      '.msg-form__contenteditable',
+      'div[contenteditable="true"][class*="msg"]',
+      'div[data-placeholder*="Write a message"]',
+      'div[aria-label*="Write a message"]',
+    ];
+    for (const sel of inputSelectors) {
+      const msgInput = document.querySelector(sel);
+      if (msgInput) {
+        let container = msgInput.parentElement;
+        for (let i = 0; i < 6 && container; i++) {
+          if (container.querySelector('button') || container.classList.toString().includes('msg-form')) {
+            container.prepend(btn);
+            console.log('[OutreachPro DM] ✅ Injected near message input:', sel);
+            return;
+          }
+          container = container.parentElement;
+        }
+      }
+    }
+
+    // ─── Strategy 5: msg-overlay or msg-thread context ───
+    const overlaySelectors = [
+      '.msg-overlay-conversation-bubble',
+      '.msg-convo-wrapper',
+      '.msg-thread',
+      'div[class*="msg-overlay-conversation"]',
+      'div[class*="msg-s-message-list"]',
+    ];
+    for (const sel of overlaySelectors) {
+      const overlay = document.querySelector(sel);
+      if (overlay) {
+        // Find any form or footer area within
+        const inner = overlay.querySelector('footer, [class*="footer"], [class*="action"], form');
+        if (inner) {
+          inner.prepend(btn);
+          console.log('[OutreachPro DM] ✅ Injected into overlay inner:', sel);
+          return;
+        }
+      }
+    }
+
+    // ─── Strategy 6: Floating button fallback ───
+    if (isOnMessagingPage()) {
+      btn.classList.add('floating');
       document.body.appendChild(btn);
-      console.log('[OutreachPro DM] AI Reply button injected as floating button');
+      console.log('[OutreachPro DM] ✅ Injected as floating button');
       return;
     }
 
-    console.log('[OutreachPro DM] Could not find injection point');
+    console.log('[OutreachPro DM] ⚠ Could not find injection point');
   }
 
   function isOnMessagingPage() {
     return location.pathname.includes('/messaging') ||
-           document.querySelector('.msg-overlay-conversation-bubble, .msg-form__contenteditable, .msg-thread, div[class*="msg-form"]');
+           !!document.querySelector(
+             '.msg-overlay-conversation-bubble, ' +
+             '.msg-form__contenteditable, ' +
+             '.msg-thread, ' +
+             'div[class*="msg-form"], ' +
+             'div[class*="msg-overlay-conversation"], ' +
+             'div[role="textbox"][contenteditable="true"]'
+           );
   }
 
   // ═══════════════════════════════════════════
@@ -835,7 +675,7 @@
       ? (conversation.lastMessage.text.length > 100
         ? conversation.lastMessage.text.substring(0, 97) + '...'
         : conversation.lastMessage.text)
-      : 'No messages found';
+      : 'No messages found — start a new conversation';
 
     panel.innerHTML = `
       <div class="dm-ai-header">
@@ -891,14 +731,8 @@
         const tabName = tab.dataset.tab;
         panel.querySelector('#dm-ai-tab-generate').style.display = tabName === 'generate' ? 'block' : 'none';
         panel.querySelector('#dm-ai-tab-training').style.display = tabName === 'training' ? 'block' : 'none';
-
-        // Update actions
-        const actions = panel.querySelector('#dm-ai-actions');
-        actions.style.display = tabName === 'generate' ? 'flex' : 'none';
-
-        if (tabName === 'training') {
-          renderTrainingStudio(panel);
-        }
+        panel.querySelector('#dm-ai-actions').style.display = tabName === 'generate' ? 'flex' : 'none';
+        if (tabName === 'training') renderTrainingStudio(panel);
       };
     });
 
@@ -913,13 +747,11 @@
       const allProfiles = await getProfiles();
       const profile = allProfiles.find(p => p.id === selectedId) || allProfiles[0];
 
-      // Show loading
       responseArea.style.display = 'none';
       skelArea.style.display = 'block';
       copyBtn.style.display = 'none';
       insertBtn.style.display = 'none';
 
-      // Re-scrape conversation for fresh context
       const freshConv = scrapeConversation();
 
       setTimeout(() => {
@@ -940,30 +772,42 @@
       });
     };
 
-    // Insert into LinkedIn message box (review first — not auto-send)
-    insertBtn.onclick = () => {
-      insertIntoMessageBox(responseArea.value);
-    };
+    // Insert
+    insertBtn.onclick = () => insertIntoMessageBox(responseArea.value);
   }
 
   // ═══════════════════════════════════════════
   //  7. INSERT INTO LINKEDIN MESSAGE BOX
+  //  React-compatible: fires synthetic events like Auto Gmail
   // ═══════════════════════════════════════════
   function insertIntoMessageBox(text) {
-    const box = document.querySelector(
-      '.msg-form__contenteditable, ' +
-      'div[role="textbox"][contenteditable="true"], ' +
-      '.msg-form__msg-content-container div[contenteditable="true"]'
-    );
+    const boxSelectors = [
+      '.msg-form__contenteditable div[contenteditable="true"]',
+      '.msg-form__contenteditable',
+      'div[role="textbox"][contenteditable="true"]',
+      'div[contenteditable="true"][class*="msg"]',
+      'div[aria-label*="Write a message"]',
+      'div[data-placeholder*="Write a message"]',
+    ];
+
+    let box = null;
+    for (const sel of boxSelectors) {
+      box = document.querySelector(sel);
+      if (box) break;
+    }
 
     if (!box) {
       navigator.clipboard.writeText(text);
-      showDMToast('Message copied to clipboard. Paste it in the message box.', 'success');
+      showDMToast('📋 Copied to clipboard — paste it in the message box!', 'success');
       return;
     }
 
     box.focus();
+
+    // Clear existing content
     box.innerHTML = '';
+
+    // Insert text as paragraphs
     const paragraphs = text.split('\n').filter(l => l.trim());
     paragraphs.forEach(p => {
       const pEl = document.createElement('p');
@@ -971,15 +815,28 @@
       box.appendChild(pEl);
     });
 
-    // Trigger React events
-    box.dispatchEvent(new Event('input', { bubbles: true }));
+    // Fire React-compatible synthetic events (inspired by Auto Gmail's approach)
+    // React listens on the root, so we need to fire native events that bubble
+    const nativeInputEvent = new InputEvent('input', {
+      bubbles: true,
+      cancelable: true,
+      inputType: 'insertText',
+      data: text,
+    });
+    box.dispatchEvent(nativeInputEvent);
     box.dispatchEvent(new Event('change', { bubbles: true }));
-    box.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: ' ' }));
-    box.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: ' ' }));
 
-    showDMToast('Reply inserted! Review and click Send when ready.', 'success');
+    // Also fire keyboard events to trigger LinkedIn's draft detection
+    box.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a', keyCode: 65 }));
+    box.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a', keyCode: 65 }));
+    box.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, key: 'a', keyCode: 65 }));
 
-    // Close panel
+    // Trigger React's internal value tracker if present
+    const tracker = box._valueTracker;
+    if (tracker) tracker.setValue('');
+
+    showDMToast('✅ Reply inserted! Review and click Send when ready.', 'success');
+
     if (aiPanel) { aiPanel.remove(); aiPanel = null; }
   }
 
@@ -1017,7 +874,6 @@
       <div id="dm-ai-profile-editor" style="display:none"></div>
     `;
 
-    // Add Profile
     container.querySelector('#dm-ai-add-profile').onclick = () => {
       const newProfile = {
         id: 'custom_' + Date.now(),
@@ -1027,27 +883,21 @@
         examples: [],
       };
       profiles.push(newProfile);
-      saveProfiles(profiles).then(() => {
-        renderProfileEditor(panel, newProfile, profiles);
-      });
+      saveProfiles(profiles).then(() => renderProfileEditor(panel, newProfile, profiles));
     };
 
-    // Edit buttons
     container.querySelectorAll('.dm-ai-edit-profile').forEach(btn => {
       btn.onclick = (e) => {
         e.stopPropagation();
-        const pid = btn.dataset.pid;
-        const profile = profiles.find(p => p.id === pid);
+        const profile = profiles.find(p => p.id === btn.dataset.pid);
         if (profile) renderProfileEditor(panel, profile, profiles);
       };
     });
 
-    // Delete buttons
     container.querySelectorAll('.dm-ai-del-profile').forEach(btn => {
       btn.onclick = (e) => {
         e.stopPropagation();
-        const pid = btn.dataset.pid;
-        const idx = profiles.findIndex(p => p.id === pid);
+        const idx = profiles.findIndex(p => p.id === btn.dataset.pid);
         if (idx > -1) {
           profiles.splice(idx, 1);
           saveProfiles(profiles).then(() => renderTrainingStudio(panel));
@@ -1109,10 +959,8 @@
       <button id="dm-ai-save-profile" style="width:100%;padding:10px;font-size:13px;font-weight:600;background:linear-gradient(135deg,#8B5CF6,#6366F1,#4F46E5);color:#fff;border:none;border-radius:10px;cursor:pointer;font-family:inherit;box-shadow:0 2px 10px rgba(99,102,241,0.3)">💾 Save Profile</button>
     `;
 
-    // Back
     container.querySelector('#dm-ai-back-profiles').onclick = () => renderTrainingStudio(panel);
 
-    // Add example
     container.querySelector('#dm-ai-add-example').onclick = () => {
       container.querySelector('#dm-ai-new-example').style.display = 'block';
     };
@@ -1127,7 +975,6 @@
       saveProfiles(allProfiles).then(() => renderProfileEditor(panel, profile, allProfiles));
     };
 
-    // Delete example
     container.querySelectorAll('.ex-del').forEach(btn => {
       btn.onclick = () => {
         const idx = parseInt(btn.dataset.idx);
@@ -1136,7 +983,6 @@
       };
     });
 
-    // Save profile
     container.querySelector('#dm-ai-save-profile').onclick = () => {
       profile.name = container.querySelector('#dm-ai-pname').value.trim() || profile.name;
       profile.description = container.querySelector('#dm-ai-pdesc').value.trim() || profile.description;
@@ -1170,43 +1016,93 @@
 
   // ═══════════════════════════════════════════
   //  10. OBSERVER & INIT
+  //  Auto Gmail-inspired: debounced MutationObserver
+  //  + waitForElement for initial load
   // ═══════════════════════════════════════════
   function startObserving() {
     if (observer) observer.disconnect();
-    let timer = null;
-    observer = new MutationObserver(() => {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
+    let debounceTimer = null;
+
+    observer = new MutationObserver((mutations) => {
+      // Quick check: did any mutation add msg-related elements?
+      let relevant = false;
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType === 1) {
+            const cl = node.className || '';
+            if (typeof cl === 'string' && (cl.includes('msg') || cl.includes('message') || cl.includes('overlay'))) {
+              relevant = true;
+              break;
+            }
+            // Check children
+            if (node.querySelector && node.querySelector('[class*="msg"]')) {
+              relevant = true;
+              break;
+            }
+          }
+        }
+        if (relevant) break;
+      }
+
+      if (!relevant && document.querySelector('.' + AI_BTN_CLASS)) return;
+
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
         if (isOnMessagingPage() && !document.querySelector('.' + AI_BTN_CLASS)) {
           injectAIReplyButton();
         }
-      }, 1500);
+      }, 800);
     });
+
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
   function init() {
     if (!location.hostname.includes('linkedin.com')) return;
-    console.log('[OutreachPro DM] Initializing DM Response Generator');
+    console.log('[OutreachPro DM] 🚀 Initializing AI DM Response Generator v2');
     injectDMStyles();
 
-    // Try injecting at multiple intervals
-    setTimeout(injectAIReplyButton, 2000);
-    setTimeout(injectAIReplyButton, 4000);
-    setTimeout(injectAIReplyButton, 7000);
+    // Use waitForElement for initial injection (Auto Gmail pattern)
+    const msgFormSelector = [
+      '.msg-form__footer',
+      '.msg-form__contenteditable',
+      'div[role="textbox"][contenteditable="true"]',
+      '.msg-overlay-conversation-bubble',
+      'div[class*="msg-form"]',
+    ].join(', ');
+
+    // Try waitForElement first (efficient — no polling)
+    waitForElement(msgFormSelector, { timeout: 10000 })
+      .then(() => {
+        setTimeout(injectAIReplyButton, 500);
+      })
+      .catch(() => {
+        console.log('[OutreachPro DM] No msg form found via waitForElement, trying fallback...');
+        // Fallback: if on messaging page, inject floating button
+        if (isOnMessagingPage()) {
+          setTimeout(injectAIReplyButton, 1000);
+        }
+      });
+
+    // Also try at intervals for SPA navigation
+    setTimeout(injectAIReplyButton, 3000);
+    setTimeout(injectAIReplyButton, 6000);
 
     startObserving();
 
-    // Watch URL changes for SPA navigation
+    // Watch URL changes (LinkedIn is an SPA)
     lastMsgUrl = location.href;
     setInterval(() => {
       if (location.href !== lastMsgUrl) {
         lastMsgUrl = location.href;
-        // Clean up old buttons
+        injectionAttempts = 0;
+        // Clean up old buttons and panel
         document.querySelectorAll('.' + AI_BTN_CLASS).forEach(b => b.remove());
         if (aiPanel) { aiPanel.remove(); aiPanel = null; }
-        setTimeout(injectAIReplyButton, 2000);
-        setTimeout(injectAIReplyButton, 4000);
+
+        // Re-inject after navigation
+        setTimeout(injectAIReplyButton, 1500);
+        setTimeout(injectAIReplyButton, 3500);
       }
     }, 1000);
   }
