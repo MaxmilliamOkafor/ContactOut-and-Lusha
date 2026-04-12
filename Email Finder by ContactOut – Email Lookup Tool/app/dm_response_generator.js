@@ -508,7 +508,7 @@
       professional: [`Hi ${name},`, `Hello ${name},`],
       casual: [`Hey ${name}!`, `Hi ${name}!`],
       enthusiastic: [`Hey ${name}! 😊`, `Hi there ${name}!`],
-      witty: [`Hey ${name}!`, `Hi ${name},`],
+      witty: [`Hey ${name}!`, `Hi ${name} —`],
     };
     const greeting = pick(greetings[tone] || greetings.professional);
 
@@ -575,13 +575,13 @@
         `Your work caught my attention, and I think there could be a great opportunity for us to collaborate. I'd welcome the chance to share some ideas with you.\n\nWould you have a few minutes this week?`,
       ],
       casual: [
-        `Came across your profile and had to reach out. Your work is really cool! Would love to chat about what you're up to.\n\nNo pressure at all, just thought we could swap ideas!`,
+        `Came across your profile and had to reach out — your work is really cool! Would love to chat about what you're up to.\n\nNo pressure at all, just thought we could swap ideas!`,
       ],
       enthusiastic: [
         `I just came across your profile and I'm genuinely blown away by what you've been building! I'd absolutely love to connect and hear more about your journey.\n\nWould you be up for a quick chat?`,
       ],
       witty: [
-        `I'll keep this short. Your profile stood out (in a good way). I think we might have some interesting things to talk about.\n\nUp for a quick chat? Promise I won't pitch you a timeshare. 😄`,
+        `I'll keep this short — your profile stood out (in a good way). I think we might have some interesting things to talk about.\n\nUp for a quick chat? Promise I won't pitch you a timeshare. 😄`,
       ],
     };
 
@@ -605,7 +605,7 @@
     const goalBridges = {
       meeting: `Would you be free for a brief call this week to dive deeper?`,
       rapport: `I'd love to hear your thoughts on this as well!`,
-      default: `Happy to elaborate further. What would be the best way to continue this conversation?`,
+      default: `Happy to elaborate further — what would be the best way to continue this conversation?`,
     };
 
     const goalKey = goal.toLowerCase().includes('meeting') ? 'meeting' :
@@ -622,7 +622,7 @@
       witty: ['Respect!', 'Fair enough!', 'I appreciate the directness!'],
     };
 
-    return `${pick(openers[tone] || openers.professional)} Timing is everything.\n\nFeel free to reach out whenever it makes sense. I'd genuinely love to connect when the time is right. In the meantime, I'm happy to be a resource if anything comes up.\n\nWishing you all the best!`;
+    return `${pick(openers[tone] || openers.professional)} Timing is everything.\n\nFeel free to reach out whenever it makes sense — I'd genuinely love to connect when the time is right. In the meantime, I'm happy to be a resource if anything comes up.\n\nWishing you all the best!`;
   }
 
   function buildPositiveReply(ctx, tone, goal) {
@@ -658,7 +658,7 @@
       professional: [`Great to connect with you as well! I've been following your work and really admire what you've accomplished.\n\nI'd love to learn more about what you're currently focused on. Would you be open to a brief conversation?`],
       casual: [`Likewise! Really great to connect. I've been checking out your profile and your work is super impressive.\n\nWould love to chat sometime if you're up for it!`],
       enthusiastic: [`So great to connect with you! I've been really impressed by your work and I'd absolutely love to learn more about your journey!\n\nWould you be open to a quick chat? 😊`],
-      witty: [`Great to connect! I promise I'm more interesting than my LinkedIn headline suggests 😄\n\nI'd love to hear about what you're working on. Always looking to connect with interesting people.`],
+      witty: [`Great to connect! I promise I'm more interesting than my LinkedIn headline suggests 😄\n\nI'd love to hear about what you're working on — always looking to connect with interesting people.`],
     };
 
     return pick(replies[tone] || replies.professional);
@@ -667,7 +667,7 @@
   function buildFollowupReply(ctx, tone, goal) {
     const replies = [
       `Thanks for following up! I appreciate the persistence. Let me get back to you with some more details shortly.\n\nIn the meantime, is there anything specific you'd like me to address?`,
-      `Thanks for the nudge! I've been meaning to get back to you. Let's find a time to connect properly. What does your week look like?`,
+      `Thanks for the nudge! I've been meaning to get back to you. Let's find a time to connect properly — what does your week look like?`,
     ];
     return pick(replies);
   }
@@ -692,9 +692,9 @@
 
     // Generic but still conversational
     const generics = {
-      professional: [`Thanks for sharing that, really appreciate the insight. I'd love to continue this conversation and dig deeper into the details.\n\nWhat would be the best way to move forward?`],
+      professional: [`Thanks for sharing that — really appreciate the insight. I'd love to continue this conversation and dig deeper into the details.\n\nWhat would be the best way to move forward?`],
       casual: [`That's really interesting! Thanks for sharing. I'd love to keep this conversation going.\n\nWhat are your thoughts on connecting for a quick chat?`],
-      enthusiastic: [`This is so interesting! I really appreciate you sharing that! 🙌\n\nI'd absolutely love to continue this conversation. What's the best way to keep in touch?`],
+      enthusiastic: [`This is so interesting! I really appreciate you sharing that! 🙌\n\nI'd absolutely love to continue this conversation — what's the best way to keep in touch?`],
       witty: [`Interesting stuff! I could talk about this all day (but I'll spare your inbox).\n\nWant to grab a virtual coffee and chat more? ☕`],
     };
 
@@ -743,7 +743,7 @@
       witty: [
         [/I'd love to/gi, () => pick(["I'd genuinely love to", "Count me in to", "I'm all in for", "Sign me up to"])],
         [/Let me know/gi, () => pick(["Ball's in your court", "Your move", "I'm all ears", "The floor is yours"])],
-        [/I believe/gi, () => pick(["Call me crazy but I think", "Plot twist:", "Here's the thing."])],
+        [/I believe/gi, () => pick(["Call me crazy but I think", "Plot twist:", "Here's the thing —"])],
       ],
     };
 
