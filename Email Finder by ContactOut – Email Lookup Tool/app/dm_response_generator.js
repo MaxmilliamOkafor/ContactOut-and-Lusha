@@ -640,7 +640,53 @@
     // ─── Strip cliché corporate buzzwords ───
     reply = sanitizeCliches(reply);
 
+    // ─── Final humanization pass (remove AI tells) ───
+    reply = humanize(reply);
+
     return reply;
+  }
+
+  // Remove the common tells that make generated text feel AI-written:
+  // em dashes, stacked exclamation marks, filler adverbs, gratuitous
+  // emojis, "Great question!" style opener, and phrases like
+  // "I'd absolutely love to".
+  function humanize(text) {
+    // Em dashes and en dashes → period+space (keeping sentences short)
+    text = text.replace(/\s*[\u2014\u2013]\s*/g, '. ');
+    // Remove trailing "..." used as fake pause
+    text = text.replace(/\.{3,}/g, '.');
+    // Drop filler adverbs that scream AI
+    text = text.replace(/\b(genuinely|absolutely|truly|honestly|literally|super|really really)\s+/gi, '');
+    // Soften "I'd love to" when it survives earlier passes
+    text = text.replace(/\bI['’]d (absolutely |really |genuinely |truly )?love to\b/gi, () =>
+      pick(["I'd like to", "happy to", "keen to", "I'd welcome the chance to"]));
+    // Nuke "That's a really good question." style AI openers first (longer
+    // pattern), then the standalone "Great question!" siblings. Anchored to
+    // sentence start so we don't shred mid-sentence text.
+    text = text.replace(
+      /(^|[\n.!?]\s*)That['’]s\s+(?:a\s+)?(?:really\s+|pretty\s+|quite\s+)?(?:good|great|wonderful|amazing|excellent)\s+question[!.\s]*/gi,
+      '$1'
+    );
+    text = text.replace(
+      /(^|[\n.!?]\s*)(?:Great|Good|Amazing|Excellent|Love that|Glad you asked)\s+question[!.\s]*/gi,
+      '$1'
+    );
+    // Cap consecutive exclamations at one
+    text = text.replace(/!{2,}/g, '!');
+    // At most one '!' per sentence chunk
+    let exclaims = 0;
+    text = text.replace(/!/g, () => (++exclaims > 1 ? '.' : '!'));
+    // Strip emoji clusters down to at most one per reply
+    const emojiRe = /[\u2600-\u27BF\uE000-\uF8FF\u{1F000}-\u{1FFFF}]/gu;
+    let emojiSeen = 0;
+    text = text.replace(emojiRe, (m) => (++emojiSeen > 1 ? '' : m));
+    // Collapse whitespace introduced by removals
+    text = text.replace(/[ \t]{2,}/g, ' ');
+    text = text.replace(/\n[ \t]+/g, '\n');
+    text = text.replace(/\s+([,.!?])/g, '$1');
+    // Capitalize first letter of each sentence if a removal left lowercase
+    text = text.replace(/(^|[.!?]\s+)([a-z])/g, (_, p, c) => p + c.toUpperCase());
+    return text.trim();
   }
 
   function sanitizeCliches(text) {
@@ -805,9 +851,9 @@
   function buildColdOutreach(name, tone, goal, profile) {
     const greeting = pick({
       professional: [`Hi ${name},`, `Hello ${name},`],
-      casual: [`Hey ${name}!`, `Hi ${name}!`],
-      enthusiastic: [`Hey ${name}! 😊`],
-      witty: [`Hey ${name}!`],
+      casual: [`Hey ${name},`, `Hi ${name},`],
+      enthusiastic: [`Hey ${name},`],
+      witty: [`Hey ${name},`],
     }[tone] || [`Hi ${name},`]);
 
     // Use profile examples as style guide if available
@@ -822,17 +868,17 @@
 
     const templates = {
       professional: [
-        `I came across your profile and was really impressed by your background. I think we could have a great conversation about what we're both working on.\n\nWould you be open to a quick chat?`,
-        `Your work caught my attention, and I think there could be a great opportunity for us to collaborate. I'd welcome the chance to share some ideas with you.\n\nWould you have a few minutes this week?`,
+        `Saw your background and thought it was worth reaching out. Would you be open to a short call this week or next?`,
+        `Came across your profile and it looked like there might be some useful overlap with what I'm working on. Open to a quick chat?`,
       ],
       casual: [
-        `Came across your profile and had to reach out. Your work is really cool! Would love to chat about what you're up to.\n\nNo pressure at all, just thought we could swap ideas!`,
+        `Came across your profile and figured it was worth saying hi. Up for a quick chat sometime?`,
       ],
       enthusiastic: [
-        `I just came across your profile and I'm genuinely blown away by what you've been building! I'd absolutely love to connect and hear more about your journey.\n\nWould you be up for a quick chat?`,
+        `Came across your profile and what you're building stood out. Would be good to hear more, got 15 minutes this week?`,
       ],
       witty: [
-        `I'll keep this short. Your profile stood out (in a good way). I think we might have some interesting things to talk about.\n\nUp for a quick chat? Promise I won't pitch you a timeshare. 😄`,
+        `Promise this isn't a sales pitch. Your profile stood out, and I think there might be something worth talking about. Got 15 min?`,
       ],
     };
 
@@ -840,87 +886,145 @@
   }
 
   function buildQuestionReply(ctx, tone, goal) {
-    const starters = {
-      professional: ['Great question!', 'That\'s a really good question.', 'Absolutely, let me address that.'],
-      casual: ['Good question!', 'Oh, great question!', 'Yeah, so...'],
-      enthusiastic: ['Love that question!', 'Great question! 🙌', 'So glad you asked!'],
-      witty: ['Ah, the important questions!', 'Glad you asked!', 'Great minds ask great questions!'],
+    // Try to actually acknowledge the question rather than opening with
+    // "Great question!" — that's the single biggest AI tell.
+    const ref = referenceLastMessage(ctx);
+    const ack = {
+      professional: [
+        ref ? `Good point on "${ref}".` : `Fair point.`,
+        `Happy to get into it.`,
+        `Worth talking through.`,
+      ],
+      casual: [
+        ref ? `Good shout on "${ref}".` : `Yeah, good one.`,
+        `Happy to get into it.`,
+      ],
+      enthusiastic: [
+        ref ? `Love that you asked about "${ref}".` : `Glad you asked.`,
+      ],
+      witty: [
+        `Glad you asked.`,
+        `Fair question.`,
+      ],
     };
 
-    const bridges = [
-      `To give you a proper answer, I think a quick chat would be the best way to cover all the details.`,
-      `The short answer is: it depends on your specific situation. I'd love to walk you through the details.`,
-      `I could write a novel here, but I think a 10-minute call would give you a much better picture.`,
-    ];
-
-    const goalBridges = {
-      meeting: `Would you be free for a brief call this week to talk through the details?`,
-      rapport: `I'd love to hear your thoughts on this as well!`,
-      default: `Happy to elaborate further. What would be the best way to continue this conversation?`,
+    const bodies = {
+      professional: [
+        `The honest answer depends on a couple of things on your end, so it'd be easier to cover on a short call. Do you have 10-15 minutes this week?`,
+        `Short version: it varies case-by-case. If you're open to it, 10 minutes on a call would let me give you a straight answer rather than guess.`,
+      ],
+      casual: [
+        `The honest answer depends on a couple of things, so easier on a call. Got 10 min this week?`,
+        `Short answer: it depends. Happy to walk you through it if you've got 10 min.`,
+      ],
+      enthusiastic: [
+        `The real answer depends on your situation, so 10 minutes on a call would be way more useful than me guessing. Got time this week?`,
+      ],
+      witty: [
+        `The honest answer is "it depends" (classic). 10 minutes on a call and I can give you a real one. Got time this week?`,
+      ],
     };
 
+    const goalBridge = {
+      meeting: `Does sometime this week work?`,
+      rapport: `Curious what prompted the question too.`,
+      default: ``,
+    };
     const goalKey = goal.toLowerCase().includes('meeting') ? 'meeting' :
                     goal.toLowerCase().includes('rapport') ? 'rapport' : 'default';
 
-    return `${pick(starters[tone] || starters.professional)}\n\n${pick(bridges)}\n\n${goalBridges[goalKey]}`;
+    const parts = [
+      pick(ack[tone] || ack.professional),
+      pick(bodies[tone] || bodies.professional),
+    ];
+    if (goalBridge[goalKey]) parts.push(goalBridge[goalKey]);
+    return parts.join(' ');
   }
 
   function buildObjectionReply(ctx, tone, goal) {
-    const openers = {
-      professional: ['I completely understand.', 'Totally respect that.', 'I appreciate your honesty.'],
-      casual: ['No worries at all!', 'Totally get it!', 'All good!'],
-      enthusiastic: ['Absolutely no pressure!', 'I totally understand! 😊'],
-      witty: ['Respect!', 'Fair enough!', 'I appreciate the directness!'],
+    const replies = {
+      professional: [
+        `Understood, and no pressure. If the timing changes, I'm around. Wishing you well in the meantime.`,
+        `Completely get it. I'll leave it here. If anything shifts, the door's open on my side.`,
+      ],
+      casual: [
+        `All good, no pressure. If timing changes, you know where to find me.`,
+        `Totally get it. Catch you another time.`,
+      ],
+      enthusiastic: [
+        `No worries at all, timing is everything. If things shift, I'm happy to pick this up later.`,
+      ],
+      witty: [
+        `Fair enough. Filing this under "maybe later". Good luck with everything in the meantime.`,
+      ],
     };
-
-    return `${pick(openers[tone] || openers.professional)} Timing is everything.\n\nFeel free to reach out whenever it makes sense. I'd genuinely love to connect when the time is right. In the meantime, I'm happy to be a resource if anything comes up.\n\nWishing you all the best!`;
+    return pick(replies[tone] || replies.professional);
   }
 
   function buildPositiveReply(ctx, tone, goal) {
-    const openers = {
-      professional: ['That\'s wonderful to hear!', 'I\'m glad this resonates with you!'],
-      casual: ['Awesome!', 'That\'s great to hear!', 'Love it!'],
-      enthusiastic: ['This is amazing! 🎉', 'So excited to hear that!', 'Love the energy! 🙌'],
-      witty: ['Music to my ears!', 'Now we\'re talking!', 'I like where this is going!'],
+    const replies = {
+      professional: [
+        `Glad to hear it. What does your next week look like for a short call?`,
+        `Good to hear. I can grab 15 minutes most days next week, what works on your end?`,
+      ],
+      casual: [
+        `Nice, glad that lands. What's your week look like for a quick call?`,
+        `Cool, happy that resonates. Got 15 min this week?`,
+      ],
+      enthusiastic: [
+        `Happy that lands. What does your week look like for a quick call?`,
+      ],
+      witty: [
+        `Music to my ears. What's the week looking like for a 15-min call?`,
+      ],
     };
-
-    const nextSteps = [
-      `I'd love to take this forward. What does your schedule look like this week for a quick chat?`,
-      `Let me share some more details so we can figure out the best next step. Would a call work for you?`,
-      `Shall we set up a brief meeting to discuss the specifics? I'm flexible on timing.`,
-    ];
-
-    return `${pick(openers[tone] || openers.professional)}\n\n${pick(nextSteps)}`;
+    return pick(replies[tone] || replies.professional);
   }
 
   function buildThankfulReply(ctx, tone, goal) {
     const replies = {
-      professional: [`Of course! Always happy to help. Don't hesitate to reach out if anything else comes up.`, `My pleasure! I'm always here if you need anything else.`],
-      casual: [`No problem at all! Happy to help anytime.`, `Anytime! Don't be a stranger 😄`],
-      enthusiastic: [`You're so welcome! It was my pleasure! Don't hesitate to reach out anytime! 😊`, `Absolutely! So glad I could help! 🙌`],
-      witty: [`Happy to help! That's what my inbox is for (besides LinkedIn notifications 😄)`, `Anytime! Consider me your go-to person for this.`],
+      professional: [`Of course, happy to help. Shout if anything else comes up.`, `Anytime. Let me know if anything else is useful.`],
+      casual: [`Anytime. Shout if anything else comes up.`, `No worries. Ping me if you need anything.`],
+      enthusiastic: [`Happy to help, anytime. Shout if anything else comes up.`],
+      witty: [`Anytime. Consider me on standby.`],
     };
-
     return pick(replies[tone] || replies.professional);
   }
 
   function buildGreetingReply(ctx, tone, goal) {
     const replies = {
-      professional: [`Great to connect with you as well! I've been following your work and really admire what you've accomplished.\n\nI'd love to learn more about what you're currently focused on. Would you be open to a brief conversation?`],
-      casual: [`Likewise! Really great to connect. I've been checking out your profile and your work is super impressive.\n\nWould love to chat sometime if you're up for it!`],
-      enthusiastic: [`So great to connect with you! I've been really impressed by your work and I'd absolutely love to learn more about your journey!\n\nWould you be open to a quick chat? 😊`],
-      witty: [`Great to connect! I promise I'm more interesting than my LinkedIn headline suggests 😄\n\nI'd love to hear about what you're working on. Always looking to connect with interesting people.`],
+      professional: [
+        `Good to connect. I've had a look at your work and would be keen to hear what you're focused on right now. Open to a short call sometime?`,
+        `Thanks for connecting. Would be useful to hear what you're working on these days. Happy to jump on a quick call if you're up for it.`,
+      ],
+      casual: [
+        `Likewise, good to connect. What are you working on these days?`,
+        `Good to connect. What's keeping you busy lately?`,
+      ],
+      enthusiastic: [
+        `Good to connect. Had a look at what you're doing and would love to hear more. What are you focused on right now?`,
+      ],
+      witty: [
+        `Good to connect. I'll spare you the LinkedIn small talk. What are you actually working on these days?`,
+      ],
     };
-
     return pick(replies[tone] || replies.professional);
   }
 
   function buildFollowupReply(ctx, tone, goal) {
-    const replies = [
-      `Thanks for following up! I appreciate the persistence. Let me get back to you with some more details shortly.\n\nIn the meantime, is there anything specific you'd like me to address?`,
-      `Thanks for the nudge! I've been meaning to get back to you. Let's find a time to connect properly. What does your week look like?`,
-    ];
-    return pick(replies);
+    const replies = {
+      professional: [
+        `Thanks for the nudge. Anything specific you'd like me to cover first?`,
+        `Appreciate the follow-up. What's the best time for a short call this week?`,
+      ],
+      casual: [
+        `Thanks for the nudge. Anything specific you want me to cover?`,
+        `Appreciate the ping. Got 10 min this week?`,
+      ],
+      enthusiastic: [`Thanks for circling back. What does your week look like for a quick call?`],
+      witty: [`Fair nudge. What's the best time this week?`],
+    };
+    return pick(replies[tone] || replies.professional);
   }
 
   // Pull a short, human-sounding reference to the partner's last message so
@@ -939,42 +1043,44 @@
   }
 
   function buildGeneralReply(ctx, tone, goal) {
-    // Use key phrases from the conversation to make the reply feel relevant
+    // Topic-specific short replies. Keep under ~2 sentences.
     const topicResponses = {
-      job: `This sounds like a really interesting opportunity! I'd love to hear more about the specifics and see if there's a good fit.`,
-      meeting: `I'd be happy to set something up! What time works best for you this week?`,
-      product: `That sounds really interesting! I'd love to learn more about how it works and how it could be relevant to what I'm doing.`,
-      collaboration: `I love the idea of working together! I think we could really complement each other's work. Let's talk more about this.`,
-      pricing: `Great question about the details. I think the best way to give you an accurate picture would be a quick call where I can understand your specific needs. Would that work?`,
-      experience: `That's a really impressive background! I'd love to hear more about your experience and what you're focused on now.`,
+      job: `Sounds interesting. Happy to hear more on the specifics, what does the role actually look like day-to-day?`,
+      meeting: `Sure, happy to find a time. What works on your end this week?`,
+      product: `Worth a look. What's the quickest way to see it in action?`,
+      collaboration: `Open to it. What did you have in mind?`,
+      pricing: `Happy to get into the numbers. Easier on a short call so I can give you something based on your situation rather than a generic figure.`,
+      experience: `Appreciate you sharing. What are you focused on at the moment?`,
     };
 
-    // Find the most relevant topic response
     for (const topic of ctx.topics) {
       if (topicResponses[topic]) {
-        return applyToneVariations(topicResponses[topic], tone) + `\n\nLooking forward to continuing this conversation!`;
+        return applyToneVariations(topicResponses[topic], tone);
       }
     }
 
-    // Generic but still conversational — weave in a reference to what they
-    // actually said so it doesn't read like a canned template.
+    // Fallback: reference what they said and ask one clear question.
     const ref = referenceLastMessage(ctx);
-    const quoted = ref ? `"${ref}"` : 'that';
-
     const generics = {
       professional: [
-        `Appreciate you mentioning ${quoted} — that's genuinely useful context. Happy to dig into it further whenever works for you.\n\nWhat would be a helpful next step on your end?`,
-        `Thanks for the note on ${quoted}. Makes sense, and I'd like to understand your thinking a bit more before suggesting anything.\n\nWhat's most important to you here?`,
+        ref ? `Makes sense, especially the bit about "${ref}". What's the most useful next step on your end?`
+            : `Makes sense. What's the most useful next step on your end?`,
+        ref ? `Thanks for the context on "${ref}". What's shaping your thinking here?`
+            : `Thanks for the context. What's shaping your thinking here?`,
       ],
       casual: [
-        `Good point on ${quoted} — hadn't thought about it that way. Keen to hear more.\n\nWhat's the best way to keep this going?`,
-        `${ref ? `Your take on ${quoted} makes sense` : 'That makes sense'} — appreciate you sharing. Happy to keep chatting whenever you've got a minute.`,
+        ref ? `Fair point on "${ref}". What's the best next step?`
+            : `Fair enough. What's the best next step?`,
+        ref ? `"${ref}" makes sense. What's driving that?`
+            : `Makes sense. What's driving that?`,
       ],
       enthusiastic: [
-        `${ref ? `Loved what you said about ${quoted}!` : 'Love this!'} 🙌 Definitely want to hear more about where you're taking it.\n\nWhat's next on your end?`,
+        ref ? `Good to hear the angle on "${ref}". What's next on your side?`
+            : `Good to hear. What's next on your side?`,
       ],
       witty: [
-        `${ref ? `${quoted} — now that's a thread worth pulling on.` : 'Worth pulling on this thread.'} I'll bite — what's the backstory?`,
+        ref ? `"${ref}" is a thread worth pulling on. What's the backstory?`
+            : `Worth pulling on. What's the backstory?`,
       ],
     };
 
@@ -1004,32 +1110,29 @@
   }
 
   function applyToneVariations(text, tone) {
+    // Lightweight lexical variation only. Deliberately avoids escalating
+    // phrases into "I'd absolutely love to"-style AI speak.
     const variations = {
       professional: [
-        [/I'd love to/gi, () => pick(["I would be glad to", "I'd welcome the opportunity to", "I'd be pleased to"])],
-        [/Let me know/gi, () => pick(["Please don't hesitate to reach out", "I look forward to hearing from you", "Feel free to share your thoughts"])],
-        [/I believe/gi, () => pick(["I'm confident", "Based on my experience,", "I'm certain"])],
+        [/\bI['’]d love to\b/gi, () => pick(["I'd like to", "happy to", "keen to"])],
+        [/\bLet me know\b/gi, () => pick(["Let me know your thoughts", "Happy to hear your take"])],
       ],
       casual: [
-        [/I'd love to/gi, () => pick(["I'd really like to", "I'm keen to", "Would love to"])],
-        [/Let me know/gi, () => pick(["Drop me a line", "Hit me up", "Shoot me a message"])],
-        [/I'd like to/gi, () => pick(["Wanna", "I'm looking to", "Hoping to"])],
+        [/\bI['’]d love to\b/gi, () => pick(["keen to", "happy to"])],
+        [/\bLet me know\b/gi, () => pick(["Let me know", "Drop me a line"])],
       ],
       enthusiastic: [
-        [/I'd love to/gi, () => pick(["I'd absolutely love to", "I'm so excited to", "Can't wait to", "I'd be thrilled to"])],
-        [/Let me know/gi, () => pick(["Please let me know!", "I'm all ears!", "Would love to hear from you!", "Can't wait to hear back!"])],
-        [/I believe/gi, () => pick(["I truly believe", "I'm convinced", "I'm so confident"])],
+        [/\bI['’]d love to\b/gi, () => pick(["keen to", "happy to"])],
       ],
       witty: [
-        [/I'd love to/gi, () => pick(["I'd genuinely love to", "Count me in to", "I'm all in for", "Sign me up to"])],
-        [/Let me know/gi, () => pick(["Ball's in your court", "Your move", "I'm all ears", "The floor is yours"])],
-        [/I believe/gi, () => pick(["Call me crazy but I think", "Plot twist:", "Here's the thing."])],
+        [/\bI['’]d love to\b/gi, () => pick(["happy to", "down to"])],
+        [/\bI believe\b/gi, () => pick(["My read is", "Seems like"])],
       ],
     };
 
     const rules = variations[tone] || variations.professional;
     for (const [pattern, replacer] of rules) {
-      if (Math.random() > 0.45) {
+      if (Math.random() > 0.5) {
         text = text.replace(pattern, replacer);
       }
     }
