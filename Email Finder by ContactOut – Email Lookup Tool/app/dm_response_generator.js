@@ -548,7 +548,49 @@
     // ─── Build a reply based on what was actually said ───
     let reply = buildContextualReply(context, partnerName, tone, goal, profile);
 
+    // ─── Strip cliché corporate buzzwords ───
+    reply = sanitizeCliches(reply);
+
     return reply;
+  }
+
+  function sanitizeCliches(text) {
+    const replacements = [
+      [/\bsynergies?\b/gi, 'opportunities'],
+      [/\bleverage\b/gi, 'use'],
+      [/\btouch base\b/gi, 'catch up'],
+      [/\bcircle back\b/gi, 'follow up'],
+      [/\bdeep dive\b/gi, 'closer look'],
+      [/\bdive deeper?\b/gi, 'look closer'],
+      [/\bmove the needle\b/gi, 'make a difference'],
+      [/\blow.hanging fruit\b/gi, 'quick wins'],
+      [/\bgame.changer\b/gi, 'really useful'],
+      [/\bthought leader\b/gi, 'expert'],
+      [/\bcutting.edge\b/gi, 'modern'],
+      [/\bbest.in.class\b/gi, 'top quality'],
+      [/\bdisrupt(?:ive|ion)?\b/gi, 'improve'],
+      [/\bempower(?:ing|ment)?\b/gi, 'help'],
+      [/\bholistic\b/gi, 'complete'],
+      [/\becosystem\b/gi, 'space'],
+      [/\bvalue.add\b/gi, 'benefit'],
+      [/\bstakeholders?\b/gi, 'people involved'],
+      [/\bbandwidth\b/gi, 'time'],
+      [/\bpivot\b/gi, 'shift'],
+      [/\bscalable\b/gi, 'flexible'],
+      [/\brobust\b/gi, 'solid'],
+      [/\bseamless(?:ly)?\b/gi, 'smooth'],
+      [/\bactionable\b/gi, 'useful'],
+      [/\boptimize\b/gi, 'improve'],
+      [/\bparadigm\b/gi, 'approach'],
+      [/\binnovative\b/gi, 'new'],
+      [/\bpipeline\b/gi, 'process'],
+      [/\balign(?:ment|ed)?\b/gi, 'on the same page'],
+    ];
+
+    for (const [pattern, replacement] of replacements) {
+      text = text.replace(pattern, replacement);
+    }
+    return text;
   }
 
   function analyzeConversation(messages, lastMsg) {
@@ -690,7 +732,7 @@
 
     const templates = {
       professional: [
-        `I came across your profile and was really impressed by your background. I'd love to connect and explore potential synergies between what we're both working on.\n\nWould you be open to a brief conversation?`,
+        `I came across your profile and was really impressed by your background. I think we could have a great conversation about what we're both working on.\n\nWould you be open to a quick chat?`,
         `Your work caught my attention, and I think there could be a great opportunity for us to collaborate. I'd welcome the chance to share some ideas with you.\n\nWould you have a few minutes this week?`,
       ],
       casual: [
@@ -722,7 +764,7 @@
     ];
 
     const goalBridges = {
-      meeting: `Would you be free for a brief call this week to dive deeper?`,
+      meeting: `Would you be free for a brief call this week to talk through the details?`,
       rapport: `I'd love to hear your thoughts on this as well!`,
       default: `Happy to elaborate further. What would be the best way to continue this conversation?`,
     };
@@ -797,7 +839,7 @@
       job: `This sounds like a really interesting opportunity! I'd love to hear more about the specifics and see if there's a good fit.`,
       meeting: `I'd be happy to set something up! What time works best for you this week?`,
       product: `That sounds really interesting! I'd love to learn more about how it works and how it could be relevant to what I'm doing.`,
-      collaboration: `I love the idea of working together! I think there could be some great synergies here. Let's explore this further.`,
+      collaboration: `I love the idea of working together! I think we could really complement each other's work. Let's talk more about this.`,
       pricing: `Great question about the details. I think the best way to give you an accurate picture would be a quick call where I can understand your specific needs. Would that work?`,
       experience: `That's a really impressive background! I'd love to hear more about your experience and what you're focused on now.`,
     };
@@ -811,7 +853,7 @@
 
     // Generic but still conversational
     const generics = {
-      professional: [`Thanks for sharing that, really appreciate the insight. I'd love to continue this conversation and dig deeper into the details.\n\nWhat would be the best way to move forward?`],
+      professional: [`Thanks for sharing that, really appreciate the insight. I'd love to continue this conversation and learn more about the details.\n\nWhat would be the best way to move forward?`,]
       casual: [`That's really interesting! Thanks for sharing. I'd love to keep this conversation going.\n\nWhat are your thoughts on connecting for a quick chat?`],
       enthusiastic: [`This is so interesting! I really appreciate you sharing that! 🙌\n\nI'd absolutely love to continue this conversation. What's the best way to keep in touch?`],
       witty: [`Interesting stuff! I could talk about this all day (but I'll spare your inbox).\n\nWant to grab a virtual coffee and chat more? ☕`],
