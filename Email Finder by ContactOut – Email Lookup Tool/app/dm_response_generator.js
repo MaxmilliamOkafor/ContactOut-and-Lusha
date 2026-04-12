@@ -711,28 +711,6 @@
     // Already injected
     if (document.querySelector('.' + AI_BTN_CLASS)) return;
 
-    // Find the message input toolbar area
-    const toolbarSelectors = [
-      '.msg-form__footer',
-      '.msg-form__left-actions',
-      '.msg-form__content-container',
-      '.msg-overlay-conversation-bubble__action-bar',
-      // LinkedIn 2025/2026 full messaging page selectors
-      '.msg-form__msg-content-container',
-      '.msg-conversations-container__convo-card-container .msg-form__footer',
-      '.msg-s-message-list-container + div',
-      'footer.msg-form__footer',
-      'form.msg-form div[class*="footer"]',
-    ];
-
-    let toolbar = null;
-    for (const sel of toolbarSelectors) {
-      toolbar = document.querySelector(sel);
-      if (toolbar) break;
-    }
-
-    if (!toolbar) return;
-
     const btn = document.createElement('button');
     btn.className = AI_BTN_CLASS;
     btn.innerHTML = '<span style="animation:dm-ai-glow 2s ease-in-out infinite;display:inline-flex">✨</span><span>AI Reply</span>';
@@ -744,19 +722,94 @@
       toggleAIPanel();
     });
 
-    // Insert the button
-    if (toolbar.classList.contains('msg-form__footer') || toolbar.classList.contains('msg-form__left-actions')) {
-      toolbar.prepend(btn);
-    } else {
-      toolbar.appendChild(btn);
+    // Strategy 1: Try to find a toolbar/form area to prepend to
+    const toolbarSelectors = [
+      '.msg-form__footer',
+      '.msg-form__left-actions',
+      '.msg-form__content-container',
+      '.msg-overlay-conversation-bubble__action-bar',
+      '.msg-form__msg-content-container',
+      'form.msg-form',
+      'footer[class*="msg-form"]',
+      'div[class*="msg-form__footer"]',
+      'div[class*="msg-form__left"]',
+    ];
+
+    let toolbar = null;
+    for (const sel of toolbarSelectors) {
+      toolbar = document.querySelector(sel);
+      if (toolbar) break;
     }
 
-    console.log('[OutreachPro DM] AI Reply button injected');
+    if (toolbar) {
+      toolbar.prepend(btn);
+      console.log('[OutreachPro DM] AI Reply button injected into toolbar');
+      return;
+    }
+
+    // Strategy 2: Find the Send button and place next to it
+    const sendBtn = document.querySelector(
+      'button.msg-form__send-button, ' +
+      'button[type="submit"][class*="msg-form"], ' +
+      'button.msg-form__send-btn'
+    );
+    if (sendBtn && sendBtn.parentElement) {
+      sendBtn.parentElement.prepend(btn);
+      console.log('[OutreachPro DM] AI Reply button injected near Send button');
+      return;
+    }
+
+    // Strategy 3: Find ANY button with "Send" text in messaging area
+    const allButtons = document.querySelectorAll('button');
+    for (const b of allButtons) {
+      if (b.textContent.trim() === 'Send' && b.closest('[class*="msg"]')) {
+        b.parentElement.insertBefore(btn, b);
+        console.log('[OutreachPro DM] AI Reply button injected near Send text button');
+        return;
+      }
+    }
+
+    // Strategy 4: Find contenteditable (message input) and insert near it
+    const msgInput = document.querySelector(
+      'div[role="textbox"][contenteditable="true"], ' +
+      '.msg-form__contenteditable, ' +
+      'div[contenteditable="true"][class*="msg"], ' +
+      'div[data-placeholder="Write a message…"], ' +
+      'div[data-placeholder="Write a message..."]'
+    );
+    if (msgInput) {
+      // Walk up to find a container we can append to
+      let container = msgInput.parentElement;
+      for (let i = 0; i < 5 && container; i++) {
+        if (container.querySelector('button')) {
+          container.prepend(btn);
+          console.log('[OutreachPro DM] AI Reply button injected near message input');
+          return;
+        }
+        container = container.parentElement;
+      }
+    }
+
+    // Strategy 5: Ultimate fallback — floating button in bottom-right of messaging area
+    const msgArea = document.querySelector(
+      '.msg-thread, ' +
+      '.msg-s-message-list-container, ' +
+      'div[class*="messaging"], ' +
+      'main[class*="scaffold"]'
+    );
+    if (msgArea || isOnMessagingPage()) {
+      btn.style.cssText += 'position:fixed;bottom:80px;right:30px;z-index:9999;';
+      document.body.appendChild(btn);
+      console.log('[OutreachPro DM] AI Reply button injected as floating button');
+      return;
+    }
+
+    console.log('[OutreachPro DM] Could not find injection point');
   }
 
   function isOnMessagingPage() {
     return location.pathname.includes('/messaging') ||
-           document.querySelector('.msg-overlay-conversation-bubble, .msg-form__contenteditable, .msg-thread');
+           document.querySelector('.msg-overlay-conversation-bubble, .msg-form__contenteditable, .msg-thread, div[class*="msg-form"]');
   }
 
   // ═══════════════════════════════════════════
