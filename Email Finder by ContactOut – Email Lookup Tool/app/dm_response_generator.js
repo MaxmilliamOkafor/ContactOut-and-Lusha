@@ -360,52 +360,171 @@
   }
 
   // ═══════════════════════════════════════════
-  //  3. CONVERSATION SCRAPER
+  //  3. CONVERSATION SCRAPER (Robust v3)
+  //  3 strategies to handle LinkedIn DOM changes
   // ═══════════════════════════════════════════
   function scrapeConversation() {
-    const messages = [];
-    // LinkedIn messaging selectors — try multiple in case of DOM updates
+    let messages = [];
+
+    // ─── Strategy 1: Specific LinkedIn message selectors ───
     const msgSelectors = [
-      '.msg-s-event-listitem__body',
+      '.msg-s-event-listitem',
       '.msg-s-message-list__event',
       'li.msg-s-message-list__event',
-      '.msg-s-event-listitem',
       'div[class*="msg-s-event-listitem"]',
-      'div[class*="message-event"]',
+      'div[class*="msg-s-message-group"]',
       '.msg-s-message-group__msg',
     ];
 
     let msgElements = [];
     for (const sel of msgSelectors) {
       msgElements = document.querySelectorAll(sel);
-      if (msgElements.length > 0) break;
+      if (msgElements.length > 0) {
+        console.log('[OutreachPro DM] Scraper Strategy 1 hit:', sel, msgElements.length, 'msgs');
+        break;
+      }
     }
 
     msgElements.forEach(el => {
-      const textEl = el.querySelector('.msg-s-event-listitem__body, .msg-s-event__content, p, span[class*="message"]');
-      const senderEl = el.querySelector('.msg-s-message-group__name, .msg-s-message-group__profile-link, span[class*="sender"]');
-      if (textEl) {
+      const textEl = el.querySelector(
+        '.msg-s-event-listitem__body, ' +
+        '.msg-s-event__content, ' +
+        '.msg-s-message-group__msg-body, ' +
+        'p, span[dir="ltr"]'
+      );
+      const senderEl = el.querySelector(
+        '.msg-s-message-group__name, ' +
+        '.msg-s-message-group__profile-link, ' +
+        'span[class*="sender"], ' +
+        'a[class*="profile"]'
+      );
+      if (textEl && textEl.textContent.trim().length > 0) {
         messages.push({
           text: textEl.textContent.trim(),
           sender: senderEl ? senderEl.textContent.trim() : 'Unknown',
-          isMe: !!el.querySelector('.msg-s-event-listitem--other') === false,
+          isMe: !!(el.classList?.toString().includes('outgoing') || el.querySelector('[class*="outgoing"]')),
         });
       }
     });
 
-    // Get conversation partner name
-    const partnerNameEl = document.querySelector(
-      '.msg-overlay-bubble-header__title, ' +
-      '.msg-conversation-card__participant-names, ' +
-      '.msg-thread__title-text, ' +
-      'h2[class*="msg-overlay-bubble-header"], ' +
-      'h2[class*="conversation-title"]'
-    );
+    // ─── Strategy 2: Find msg container, get all paragraphs ───
+    if (messages.length === 0) {
+      const containerSelectors = [
+        '.msg-s-message-list-content',
+        '.msg-s-message-list',
+        'ul[class*="msg-s-message-list"]',
+        'div[class*="msg-s-message-list"]',
+        '.msg-overlay-conversation-bubble__content',
+        'div[class*="msg-overlay-conversation-bubble"]',
+        '.msg-thread',
+        'div[class*="msg-convo"]',
+      ];
+
+      let container = null;
+      for (const sel of containerSelectors) {
+        container = document.querySelector(sel);
+        if (container) {
+          console.log('[OutreachPro DM] Scraper Strategy 2 hit:', sel);
+          break;
+        }
+      }
+
+      if (container) {
+        // Grab all paragraphs and text blocks inside the message container
+        const allP = container.querySelectorAll('p, span[dir="ltr"], div[class*="body"], div[class*="content"]');
+        allP.forEach(p => {
+          const text = p.textContent.trim();
+          // Filter out very short text, timestamps, "Sent", button labels etc.
+          if (text.length > 5 && !/^\d{1,2}:\d{2}/.test(text) && !['Sent', 'Delivered', 'Read', 'Typing...'].includes(text)) {
+            // Avoid duplicates from nested elements
+            if (!messages.some(m => m.text === text || m.text.includes(text) || text.includes(m.text))) {
+              messages.push({
+                text,
+                sender: 'Unknown',
+                isMe: false,
+              });
+            }
+          }
+        });
+        console.log('[OutreachPro DM] Strategy 2 found', messages.length, 'text blocks');
+      }
+    }
+
+    // ─── Strategy 3: Brute force — get ALL text from the conversation area ───
+    if (messages.length === 0) {
+      // Find any element that looks like a conversation container
+      const bubble = document.querySelector(
+        '[class*="msg-overlay-conversation-bubble"], ' +
+        '[class*="msg-thread"], ' +
+        '[class*="messaging-thread"], ' +
+        '[class*="msg-convo"]'
+      );
+
+      if (bubble) {
+        console.log('[OutreachPro DM] Scraper Strategy 3 (brute force)');
+        // Get all text nodes that look like messages
+        const walker = document.createTreeWalker(
+          bubble,
+          NodeFilter.SHOW_TEXT,
+          {
+            acceptNode: (node) => {
+              const text = node.textContent.trim();
+              if (text.length < 8) return NodeFilter.FILTER_REJECT;
+              // Skip UI elements
+              const parent = node.parentElement;
+              if (!parent) return NodeFilter.FILTER_REJECT;
+              const tag = parent.tagName.toLowerCase();
+              if (['button', 'label', 'input', 'h1', 'h2', 'h3', 'h4'].includes(tag)) return NodeFilter.FILTER_REJECT;
+              const cls = parent.className?.toString() || '';
+              if (cls.includes('header') || cls.includes('title') || cls.includes('toolbar') || cls.includes('footer')) return NodeFilter.FILTER_REJECT;
+              return NodeFilter.FILTER_ACCEPT;
+            }
+          }
+        );
+
+        let node;
+        while (node = walker.nextNode()) {
+          const text = node.textContent.trim();
+          if (!messages.some(m => m.text === text)) {
+            messages.push({ text, sender: 'Unknown', isMe: false });
+          }
+        }
+        console.log('[OutreachPro DM] Strategy 3 found', messages.length, 'text nodes');
+      }
+    }
+
+    // ─── Get conversation partner name ───
+    let partnerName = 'there';
+    const nameSelectors = [
+      '.msg-overlay-bubble-header__title',
+      '.msg-overlay-bubble-header a',
+      'h2[class*="msg-overlay-bubble-header"]',
+      '.msg-conversation-card__participant-names',
+      '.msg-thread__title-text',
+      'h2[class*="conversation-title"]',
+      // Fallback: find the header link in the chat bubble
+      '[class*="msg-overlay-bubble-header"] a',
+      '[class*="msg-overlay-bubble-header"] span',
+      // Full messaging page
+      '[class*="msg-entity-lockup__entity-title"]',
+      '[class*="msg-thread__link-to-profile"]',
+    ];
+
+    for (const sel of nameSelectors) {
+      const el = document.querySelector(sel);
+      if (el && el.textContent.trim().length > 1) {
+        partnerName = el.textContent.trim();
+        console.log('[OutreachPro DM] Partner name found:', partnerName);
+        break;
+      }
+    }
+
+    console.log('[OutreachPro DM] Scraped conversation:', messages.length, 'messages, partner:', partnerName);
 
     return {
-      messages: messages.slice(-10), // Last 10 messages
+      messages: messages.slice(-10),
       lastMessage: messages.length > 0 ? messages[messages.length - 1] : null,
-      partnerName: partnerNameEl ? partnerNameEl.textContent.trim() : 'there',
+      partnerName,
     };
   }
 
