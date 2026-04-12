@@ -5,7 +5,7 @@
   "name": "Email Finder by ContactOut – Email Lookup Tool + OutreachPro",
   "short_name": "ContactOut + OutreachPro",
   "description": "Find emails for 75% of Linkedin or ANY website. Save profiles to CRM. AI-powered outreach: one-click personalized messages for connection requests, DMs, and emails. Upload your CV for better personalization. Unlimited — no tokens, no coins.",
-  "version": "5.18.0",
+  "version": "5.19.0",
   "options_page": "assets/pages/options.html",
   "action": {
     "default_icon": "assets/icons/icon.png",
