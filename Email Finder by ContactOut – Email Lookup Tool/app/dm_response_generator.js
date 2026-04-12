@@ -853,7 +853,7 @@
 
     // Generic but still conversational
     const generics = {
-      professional: [`Thanks for sharing that, really appreciate the insight. I'd love to continue this conversation and learn more about the details.\n\nWhat would be the best way to move forward?`,]
+      professional: [`Thanks for sharing that, really appreciate the insight. I'd love to continue this conversation and learn more about the details.\n\nWhat would be the best way to move forward?`],
       casual: [`That's really interesting! Thanks for sharing. I'd love to keep this conversation going.\n\nWhat are your thoughts on connecting for a quick chat?`],
       enthusiastic: [`This is so interesting! I really appreciate you sharing that! 🙌\n\nI'd absolutely love to continue this conversation. What's the best way to keep in touch?`],
       witty: [`Interesting stuff! I could talk about this all day (but I'll spare your inbox).\n\nWant to grab a virtual coffee and chat more? ☕`],
