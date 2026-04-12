@@ -105,7 +105,7 @@
         "*://*.linkedin.com/in/*",
         "*://*.linkedin.com/*"
       ],
-      "js": ["/app/dm_response_generator.js", "/app/email_provider_handler.js"],
+      "js": ["/app/dm_response_generator.js"],
       "css": [],
       "run_at": "document_end"
     },

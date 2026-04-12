@@ -717,6 +717,12 @@
       '.msg-form__left-actions',
       '.msg-form__content-container',
       '.msg-overlay-conversation-bubble__action-bar',
+      // LinkedIn 2025/2026 full messaging page selectors
+      '.msg-form__msg-content-container',
+      '.msg-conversations-container__convo-card-container .msg-form__footer',
+      '.msg-s-message-list-container + div',
+      'footer.msg-form__footer',
+      'form.msg-form div[class*="footer"]',
     ];
 
     let toolbar = null;
