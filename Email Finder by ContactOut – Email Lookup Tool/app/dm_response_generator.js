@@ -381,9 +381,9 @@
       tone: 'professional',
       examples: [
         { inbound: "Thanks for reaching out! What exactly does your platform do?",
-          response: "Great question! We help companies like yours streamline their recruitment pipeline by 3x. I'd love to walk you through a quick 15-min demo — would Thursday or Friday work better for you?" },
+          response: "Short version: we help teams like yours cut recruitment time by around 3x. Easier to show than describe, 15 minutes on a call. Does Thursday or Friday work?" },
         { inbound: "Sounds interesting, but I'm pretty busy right now.",
-          response: "Totally understand — I know how hectic things can get! How about we pencil in a brief 10-minute chat next week? I promise it'll be worth your time. What day works best?" },
+          response: "No rush. How about a 10-minute call next week when things settle? Pick a day that works and I'll send a time." },
       ]
     },
     {
@@ -393,7 +393,7 @@
       tone: 'casual',
       examples: [
         { inbound: "Hey, thanks for connecting!",
-          response: "Likewise! I've been following your work at [Company] — really impressive stuff with the product launch last quarter. Would love to hear more about what you're working on next!" },
+          response: "Likewise. Saw the work at [Company], the last launch looked solid. What are you focused on next?" },
       ]
     },
     {
@@ -403,7 +403,7 @@
       tone: 'professional',
       examples: [
         { inbound: "We've been considering a few options.",
-          response: "Completely understand — it's a big decision! What I can share is that our clients typically see ROI within the first 30 days. Happy to connect you with a reference in your industry. Would that help with evaluating?" },
+          response: "Makes sense, it's a real decision. Most of our clients see payback inside the first month, and I can intro you to one in your space if that's useful for the comparison. Want me to set that up?" },
       ]
     },
     {
@@ -413,7 +413,7 @@
       tone: 'witty',
       examples: [
         { inbound: "",
-          response: "Hi [Name]! I came across your profile and was genuinely impressed by your work in [field]. I'm working on something that could be a perfect fit — mind if I share a quick overview?" },
+          response: "Hi [Name], came across your work in [field] and thought it was worth reaching out. I'm working on something that might actually be relevant, mind if I send a quick overview?" },
       ]
     },
   ];
@@ -657,6 +657,39 @@
     text = text.replace(/\.{3,}/g, '.');
     // Drop filler adverbs that scream AI
     text = text.replace(/\b(genuinely|absolutely|truly|honestly|literally|super|really really)\s+/gi, '');
+
+    // Known cringe phrases that keep surfacing in AI-written DMs. Replace
+    // the whole clause (up to its terminating punctuation) with nothing,
+    // so what remains still reads cleanly.
+    // Drop whole sentences that contain a known cringe phrase. Allow up to
+    // 4 leading words of subject/verb (e.g. "Would be", "Let's grab a",
+    // "I'm genuinely") between the sentence start and the cringe phrase.
+    const subjectPrefix = "(?:[A-Za-z'’]+\\s+){0,4}";
+    const cringeSentence = [
+      "I could write a novel(?:\\s+\\w+){0,6}",
+      "music to my ears",
+      "ball['’]s in your court",
+      "plot twist",
+      "the floor is yours",
+      "promise (?:I won['’]t|it['’]ll be worth|this won['’]t)(?:\\s+\\w+){0,8}",
+      "pitch you a timeshare",
+      "virtual coffee",
+      "swap ideas",
+      "don['’]t be a stranger",
+      "consider me your go-to(?:\\s+\\w+){0,4}",
+      "(?:genuinely\\s+)?blown away(?:\\s+\\w+){0,6}",
+      "mind if I (?:share|send) a quick overview",
+    ];
+    const cringeRe = new RegExp(
+      "(^\\s*|[\\n.!?]\\s*)" + subjectPrefix + "(?:" + cringeSentence.join("|") + ")[^.!?\\n]*[.!?]?",
+      "gi"
+    );
+    // Loop: each pass consumes one cringe sentence + its terminator, which
+    // can swallow the anchor for an adjacent cringe sentence. Re-run until
+    // no further changes.
+    let prev;
+    do { prev = text; text = text.replace(cringeRe, (_, pre) => pre); }
+    while (text !== prev);
     // Soften "I'd love to" when it survives earlier passes
     text = text.replace(/\bI['’]d (absolutely |really |genuinely |truly )?love to\b/gi, () =>
       pick(["I'd like to", "happy to", "keen to", "I'd welcome the chance to"]));
@@ -964,18 +997,18 @@
   function buildPositiveReply(ctx, tone, goal) {
     const replies = {
       professional: [
-        `Glad to hear it. What does your next week look like for a short call?`,
-        `Good to hear. I can grab 15 minutes most days next week, what works on your end?`,
+        `Good to hear. What works on your end for a short call next week?`,
+        `Glad that lands. I'm free most days next week for 15 minutes, what suits you?`,
       ],
       casual: [
-        `Nice, glad that lands. What's your week look like for a quick call?`,
-        `Cool, happy that resonates. Got 15 min this week?`,
+        `Nice. What's your week looking like for a quick call?`,
+        `Cool. Got 15 min this week?`,
       ],
       enthusiastic: [
-        `Happy that lands. What does your week look like for a quick call?`,
+        `Good to hear. What does your week look like for a quick call?`,
       ],
       witty: [
-        `Music to my ears. What's the week looking like for a 15-min call?`,
+        `Glad that lands. What's the week looking like for a 15-min call?`,
       ],
     };
     return pick(replies[tone] || replies.professional);
@@ -985,8 +1018,8 @@
     const replies = {
       professional: [`Of course, happy to help. Shout if anything else comes up.`, `Anytime. Let me know if anything else is useful.`],
       casual: [`Anytime. Shout if anything else comes up.`, `No worries. Ping me if you need anything.`],
-      enthusiastic: [`Happy to help, anytime. Shout if anything else comes up.`],
-      witty: [`Anytime. Consider me on standby.`],
+      enthusiastic: [`Happy to help. Shout if anything else comes up.`],
+      witty: [`Anytime. Ping me if anything else comes up.`],
     };
     return pick(replies[tone] || replies.professional);
   }
@@ -1079,8 +1112,8 @@
             : `Good to hear. What's next on your side?`,
       ],
       witty: [
-        ref ? `"${ref}" is a thread worth pulling on. What's the backstory?`
-            : `Worth pulling on. What's the backstory?`,
+        ref ? `"${ref}" — okay, now I'm curious. What's behind it?`
+            : `Okay, now I'm curious. What's behind it?`,
       ],
     };
 
