@@ -764,13 +764,50 @@
     const btn = document.createElement('button');
     btn.className = AI_BTN_CLASS;
     btn.innerHTML = '<span style="animation:dm-ai-sparkle 2s ease-in-out infinite;display:inline-flex">✨</span><span>AI Reply</span>';
-    btn.title = 'Generate AI-powered reply based on your training data';
-    btn.addEventListener('click', (e) => {
+    btn.title = 'Click: draft AI reply in message box | Right-click: open settings';
+
+    // Single click → draft directly into the message box
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await directDraftReply(btn);
+    });
+
+    // Right-click → open the full panel for tone/outcome selection
+    btn.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       e.stopPropagation();
       toggleAIPanel();
     });
+
     return btn;
+  }
+
+  // One-click: generate reply and insert directly into the message box
+  async function directDraftReply(btn) {
+    // Show loading state on button
+    const originalHTML = btn.innerHTML;
+    btn.innerHTML = '<span style="display:inline-flex;animation:dm-ai-sparkle 0.5s ease-in-out infinite">⏳</span><span>Drafting...</span>';
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+
+    try {
+      const profiles = await getProfiles();
+      const profile = profiles[0]; // Use first profile as default
+      const conversation = scrapeConversation();
+      const reply = generateResponse(profile, conversation);
+
+      // Insert directly into the LinkedIn message box
+      insertIntoMessageBox(reply);
+    } catch (err) {
+      console.error('[OutreachPro DM] Draft error:', err);
+      showDMToast('Could not generate reply. Try again.', 'error');
+    } finally {
+      // Restore button
+      btn.innerHTML = originalHTML;
+      btn.disabled = false;
+      btn.style.opacity = '1';
+    }
   }
 
   async function injectAIReplyButton() {
