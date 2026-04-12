@@ -580,41 +580,133 @@
     }
 
     // ─── Get conversation partner name ───
+    // IMPORTANT: the header/title element isn't always inside the scope
+    // we picked (e.g. scope may be .msg-thread but the header is a sibling
+    // in .msg-convo-wrapper). So we search the scope, then climb its
+    // ancestors, and only fall back to document-wide as a last resort —
+    // because a document-wide query will happily grab the first sidebar
+    // contact's name (Jitendra at the top of the inbox list) and put it in
+    // the greeting for every conversation.
     let partnerName = 'there';
     const nameSelectors = [
+      // Overlay bubble header (pop-out chats)
       '.msg-overlay-bubble-header__title',
-      '.msg-overlay-bubble-header a',
       'h2[class*="msg-overlay-bubble-header"]',
-      '.msg-conversation-card__participant-names',
+      '.msg-overlay-bubble-header__badge-container + *',
+      '[class*="msg-overlay-bubble-header"] a',
+      '[class*="msg-overlay-bubble-header"] span[class*="title"]',
+      // Full messaging page thread header
+      '.msg-thread__link-to-profile',
+      '[class*="msg-thread__link-to-profile"]',
       '.msg-thread__title-text',
       'h2[class*="conversation-title"]',
-      // Fallback: find the header link in the chat bubble
-      '[class*="msg-overlay-bubble-header"] a',
-      '[class*="msg-overlay-bubble-header"] span',
-      // Full messaging page
+      '.msg-entity-lockup__entity-title',
       '[class*="msg-entity-lockup__entity-title"]',
-      '[class*="msg-thread__link-to-profile"]',
+      '[data-test-conversation-participant-names]',
+      '.msg-conversation-card__participant-names',
+      // Generic: any <h2> inside the scope / its ancestors
+      'header h2',
+      'h2',
     ];
 
-    for (const sel of nameSelectors) {
-      // Look inside the active scope first so we get the right partner when
-      // multiple bubbles are open; fall back to document-wide.
-      const el = (root !== document ? root.querySelector(sel) : null)
-        || document.querySelector(sel);
-      if (el && el.textContent.trim().length > 1) {
-        partnerName = el.textContent.trim();
-        console.log('[OutreachPro DM] Partner name found:', partnerName);
-        break;
+    // Build the list of containers to search, in priority order: the scope
+    // itself, then each ancestor up to <body>.
+    const searchRoots = [];
+    if (root !== document) {
+      let cur = root;
+      for (let i = 0; i < 6 && cur && cur !== document.body; i++) {
+        searchRoots.push(cur);
+        cur = cur.parentElement;
+      }
+    }
+
+    function looksLikeRealName(s) {
+      if (!s) return false;
+      const t = s.trim();
+      if (t.length < 2 || t.length > 80) return false;
+      // Reject obviously non-name strings
+      if (/^(messaging|inbox|new message|active now|online|you)$/i.test(t)) return false;
+      if (/\d{3,}/.test(t)) return false;
+      return true;
+    }
+
+    outer:
+    for (const container of searchRoots) {
+      for (const sel of nameSelectors) {
+        const els = container.querySelectorAll(sel);
+        for (const el of els) {
+          const txt = el.textContent.replace(/\s+/g, ' ').trim();
+          if (looksLikeRealName(txt)) {
+            partnerName = txt;
+            console.log('[OutreachPro DM] Partner name found (scoped):', partnerName, 'via', sel);
+            break outer;
+          }
+        }
+      }
+    }
+
+    // Last-resort document-wide fallback only if scope search found nothing.
+    // Prefer the visible (non-minimized) overlay bubble header to avoid
+    // grabbing the first sidebar contact name.
+    if (partnerName === 'there') {
+      const visibleBubble = [...document.querySelectorAll(
+        '.msg-overlay-conversation-bubble, div[class*="msg-overlay-conversation-bubble"]'
+      )].find(b => {
+        const cls = b.className ? b.className.toString() : '';
+        if (cls.includes('--is-minimized') || cls.includes('is-collapsed')) return false;
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && r.height > 80;
+      });
+      const fallbackRoot = visibleBubble || document;
+      for (const sel of nameSelectors) {
+        const el = fallbackRoot.querySelector(sel);
+        if (el && looksLikeRealName(el.textContent.trim())) {
+          partnerName = el.textContent.replace(/\s+/g, ' ').trim();
+          console.log('[OutreachPro DM] Partner name found (fallback):', partnerName, 'via', sel);
+          break;
+        }
       }
     }
 
     console.log('[OutreachPro DM] Scraped conversation:', messages.length, 'messages, partner:', partnerName);
 
+    // Pick the most recent *substantive* message as lastMessage. Greetings
+    // and pleasantries like "Hello Max, thanks for reaching out!" shouldn't
+    // dictate the reply — we want the real thing the partner said. If the
+    // very last message happens to be a greeting (common opener), walk
+    // backwards to find the real content.
+    let lastMessage = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (!m || !m.text) continue;
+      if (isTrivialMessage(m.text) && lastMessage) continue; // skip trivial if we already have something better
+      lastMessage = m;
+      if (!isTrivialMessage(m.text)) break; // found substantive — stop
+    }
+    if (!lastMessage && messages.length > 0) {
+      lastMessage = messages[messages.length - 1];
+    }
+
     return {
       messages: messages.slice(-10),
-      lastMessage: messages.length > 0 ? messages[messages.length - 1] : null,
+      lastMessage,
       partnerName,
     };
+  }
+
+  // Heuristic: is this message just a greeting, thanks, or filler?
+  function isTrivialMessage(text) {
+    if (!text) return true;
+    const t = text.trim().toLowerCase();
+    if (t.length < 12) return true;
+    // Pure greetings / opening pleasantries
+    if (/^(hi|hello|hey|hiya|greetings|good (morning|afternoon|evening))\b[\s\S]{0,40}$/i.test(t)) return true;
+    if (/^thanks? (for )?(reaching|connecting|the message|your message|getting in touch)/i.test(t)) return true;
+    if (/^thank you (for )?(reaching|connecting|the message|your message|getting in touch|your time)/i.test(t)) return true;
+    if (/^(nice|great|good|pleasure) to (meet|connect|hear)/i.test(t)) return true;
+    // Emoji-only or sticker-like replies
+    if (/^[\p{Emoji}\s!?.]+$/u.test(t) && t.length < 30) return true;
+    return false;
   }
 
   // ═══════════════════════════════════════════
@@ -901,17 +993,17 @@
 
     const templates = {
       professional: [
-        `Saw your background and thought it was worth reaching out. Would you be open to a short call this week or next?`,
-        `Came across your profile and it looked like there might be some useful overlap with what I'm working on. Open to a quick chat?`,
+        `Saw your background — would you be open to a short call this week or next?`,
+        `Your profile looked like there might be useful overlap with what I'm working on. Open to a quick chat?`,
       ],
       casual: [
-        `Came across your profile and figured it was worth saying hi. Up for a quick chat sometime?`,
+        `Saw your profile and figured it was worth saying hi. Up for a quick chat sometime?`,
       ],
       enthusiastic: [
-        `Came across your profile and what you're building stood out. Would be good to hear more, got 15 minutes this week?`,
+        `Your work stood out — got 15 minutes this week?`,
       ],
       witty: [
-        `Promise this isn't a sales pitch. Your profile stood out, and I think there might be something worth talking about. Got 15 min?`,
+        `Not a sales pitch, promise. Your profile stood out. Got 15 min?`,
       ],
     };
 
@@ -919,59 +1011,26 @@
   }
 
   function buildQuestionReply(ctx, tone, goal) {
-    // Try to actually acknowledge the question rather than opening with
-    // "Great question!" — that's the single biggest AI tell.
-    const ref = referenceLastMessage(ctx);
-    const ack = {
+    // Direct answer frame. No "Great question!" opener, no "it varies
+    // case-by-case" hedge, no quoting the question back at them.
+    const replies = {
       professional: [
-        ref ? `Good point on "${ref}".` : `Fair point.`,
-        `Happy to get into it.`,
-        `Worth talking through.`,
+        `Happy to talk through it properly. Do you have 10-15 minutes this week for a short call?`,
+        `Worth a proper answer rather than a quick one here. Free for a brief call this week?`,
+        `Happy to get into it. What time works for a 15-minute call this week?`,
       ],
       casual: [
-        ref ? `Good shout on "${ref}".` : `Yeah, good one.`,
-        `Happy to get into it.`,
+        `Happy to talk through it. Got 10 min this week for a call?`,
+        `Worth a proper answer. What's this week looking like for a quick call?`,
       ],
       enthusiastic: [
-        ref ? `Love that you asked about "${ref}".` : `Glad you asked.`,
+        `Happy to get into it properly. What's your week like for a short call?`,
       ],
       witty: [
-        `Glad you asked.`,
-        `Fair question.`,
+        `Rather answer that properly than half-answer it here. Got 10 min this week?`,
       ],
     };
-
-    const bodies = {
-      professional: [
-        `The honest answer depends on a couple of things on your end, so it'd be easier to cover on a short call. Do you have 10-15 minutes this week?`,
-        `Short version: it varies case-by-case. If you're open to it, 10 minutes on a call would let me give you a straight answer rather than guess.`,
-      ],
-      casual: [
-        `The honest answer depends on a couple of things, so easier on a call. Got 10 min this week?`,
-        `Short answer: it depends. Happy to walk you through it if you've got 10 min.`,
-      ],
-      enthusiastic: [
-        `The real answer depends on your situation, so 10 minutes on a call would be way more useful than me guessing. Got time this week?`,
-      ],
-      witty: [
-        `The honest answer is "it depends" (classic). 10 minutes on a call and I can give you a real one. Got time this week?`,
-      ],
-    };
-
-    const goalBridge = {
-      meeting: `Does sometime this week work?`,
-      rapport: `Curious what prompted the question too.`,
-      default: ``,
-    };
-    const goalKey = goal.toLowerCase().includes('meeting') ? 'meeting' :
-                    goal.toLowerCase().includes('rapport') ? 'rapport' : 'default';
-
-    const parts = [
-      pick(ack[tone] || ack.professional),
-      pick(bodies[tone] || bodies.professional),
-    ];
-    if (goalBridge[goalKey]) parts.push(goalBridge[goalKey]);
-    return parts.join(' ');
+    return pick(replies[tone] || replies.professional);
   }
 
   function buildObjectionReply(ctx, tone, goal) {
@@ -1027,18 +1086,18 @@
   function buildGreetingReply(ctx, tone, goal) {
     const replies = {
       professional: [
-        `Good to connect. I've had a look at your work and would be keen to hear what you're focused on right now. Open to a short call sometime?`,
-        `Thanks for connecting. Would be useful to hear what you're working on these days. Happy to jump on a quick call if you're up for it.`,
+        `Good to connect. What are you focused on at the moment?`,
+        `Thanks for connecting. What's keeping you busy these days?`,
       ],
       casual: [
-        `Likewise, good to connect. What are you working on these days?`,
-        `Good to connect. What's keeping you busy lately?`,
+        `Likewise. What are you working on lately?`,
+        `Good to connect. What's keeping you busy?`,
       ],
       enthusiastic: [
-        `Good to connect. Had a look at what you're doing and would love to hear more. What are you focused on right now?`,
+        `Good to connect. What are you focused on right now?`,
       ],
       witty: [
-        `Good to connect. I'll spare you the LinkedIn small talk. What are you actually working on these days?`,
+        `Good to connect. What are you actually working on?`,
       ],
     };
     return pick(replies[tone] || replies.professional);
@@ -1076,14 +1135,14 @@
   }
 
   function buildGeneralReply(ctx, tone, goal) {
-    // Topic-specific short replies. Keep under ~2 sentences.
+    // Topic-specific one-liners. No quoting, no hedging.
     const topicResponses = {
-      job: `Sounds interesting. Happy to hear more on the specifics, what does the role actually look like day-to-day?`,
-      meeting: `Sure, happy to find a time. What works on your end this week?`,
-      product: `Worth a look. What's the quickest way to see it in action?`,
+      job: `Sounds interesting — what does the role look like day-to-day?`,
+      meeting: `Sure, what works on your end this week?`,
+      product: `Worth a look — quickest way to see it in action?`,
       collaboration: `Open to it. What did you have in mind?`,
-      pricing: `Happy to get into the numbers. Easier on a short call so I can give you something based on your situation rather than a generic figure.`,
-      experience: `Appreciate you sharing. What are you focused on at the moment?`,
+      pricing: `Happy to get into numbers on a short call — what works this week?`,
+      experience: `Appreciate you sharing. What are you focused on now?`,
     };
 
     for (const topic of ctx.topics) {
@@ -1092,28 +1151,23 @@
       }
     }
 
-    // Fallback: reference what they said and ask one clear question.
-    const ref = referenceLastMessage(ctx);
+    // No quoting the partner's message back at them — nobody wants that.
+    // One acknowledgment + one clear question.
     const generics = {
       professional: [
-        ref ? `Makes sense, especially the bit about "${ref}". What's the most useful next step on your end?`
-            : `Makes sense. What's the most useful next step on your end?`,
-        ref ? `Thanks for the context on "${ref}". What's shaping your thinking here?`
-            : `Thanks for the context. What's shaping your thinking here?`,
+        `Makes sense. What's the most useful next step on your end?`,
+        `Appreciate the context. What's shaping your thinking here?`,
+        `Understood. What's most important to you on this?`,
       ],
       casual: [
-        ref ? `Fair point on "${ref}". What's the best next step?`
-            : `Fair enough. What's the best next step?`,
-        ref ? `"${ref}" makes sense. What's driving that?`
-            : `Makes sense. What's driving that?`,
+        `Fair enough. What's the next step?`,
+        `Makes sense. What's driving that?`,
       ],
       enthusiastic: [
-        ref ? `Good to hear the angle on "${ref}". What's next on your side?`
-            : `Good to hear. What's next on your side?`,
+        `Good to hear. What's next on your side?`,
       ],
       witty: [
-        ref ? `"${ref}" — okay, now I'm curious. What's behind it?`
-            : `Okay, now I'm curious. What's behind it?`,
+        `Okay, now I'm curious. What's behind it?`,
       ],
     };
 
