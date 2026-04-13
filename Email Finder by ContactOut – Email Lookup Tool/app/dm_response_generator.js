@@ -865,9 +865,21 @@
       mentionedCompanies: [],
       lastSenderIsMe: lastMsg ? lastMsg.isMe : false,
       lastMessage: lastMsg || null,
+      // How much reply is warranted. 's' = one short sentence, 'm' = two
+      // sentences, 'l' = three or more. Based on the partner's message
+      // length and complexity so we mirror the conversation's tempo.
+      matchLength: 's',
     };
 
     if (!lastMsg) return ctx;
+
+    // Work out the target reply length from what the partner wrote.
+    const raw = (lastMsg.text || '').trim();
+    const words = raw ? raw.split(/\s+/).length : 0;
+    const sentences = raw ? (raw.match(/[.!?]+/g) || []).length || 1 : 0;
+    if (words >= 60 || sentences >= 4) ctx.matchLength = 'l';
+    else if (words >= 20 || sentences >= 2) ctx.matchLength = 'm';
+    else ctx.matchLength = 's';
 
     const text = lastMsg.text.toLowerCase();
 
@@ -1011,26 +1023,56 @@
   }
 
   function buildQuestionReply(ctx, tone, goal) {
-    // Direct answer frame. No "Great question!" opener, no "it varies
-    // case-by-case" hedge, no quoting the question back at them.
+    // Scale length to what the partner wrote. Short question → short answer;
+    // detailed question → acknowledge, give a bit of context, then propose
+    // a call. No "Great question!", no "it varies case-by-case" hedge, no
+    // quoting the question back at them.
     const replies = {
-      professional: [
-        `Happy to talk through it properly. Do you have 10-15 minutes this week for a short call?`,
-        `Worth a proper answer rather than a quick one here. Free for a brief call this week?`,
-        `Happy to get into it. What time works for a 15-minute call this week?`,
-      ],
-      casual: [
-        `Happy to talk through it. Got 10 min this week for a call?`,
-        `Worth a proper answer. What's this week looking like for a quick call?`,
-      ],
-      enthusiastic: [
-        `Happy to get into it properly. What's your week like for a short call?`,
-      ],
-      witty: [
-        `Rather answer that properly than half-answer it here. Got 10 min this week?`,
-      ],
+      professional: {
+        s: [
+          `Happy to get into it. Got 10 minutes this week for a call?`,
+          `Worth a proper answer. Free for a quick call this week?`,
+        ],
+        m: [
+          `Happy to talk through it properly. Do you have 10-15 minutes this week for a short call?`,
+          `Good question to cover properly. A 15-minute call would be easier than typing it out — any time this week that works?`,
+        ],
+        l: [
+          `Appreciate the detail. Rather than half-answer this in a DM, it'd be more useful to talk it through on a short call where I can understand your setup first and give you a straight answer.\n\nIs there a 15-minute window this week or next that works?`,
+          `Thanks for the context, that helps. The honest answer depends on a few things specific to your situation, which is easier to cover on a call than here.\n\nI'm free most mornings next week — anything suit on your end?`,
+        ],
+      },
+      casual: {
+        s: [
+          `Happy to talk through it. Got 10 min?`,
+          `Worth a proper answer. Free for a quick call this week?`,
+        ],
+        m: [
+          `Happy to talk through it properly. Got 10-15 min this week?`,
+          `Good one to cover on a call rather than typing it out. What's this week looking like?`,
+        ],
+        l: [
+          `Thanks for the detail. Rather than half-answer in a DM, 15 minutes on a call would be more useful — I can actually tailor the answer to your setup.\n\nWhat's your week looking like?`,
+        ],
+      },
+      enthusiastic: {
+        s: [`Happy to get into it. Got 10 min this week?`],
+        m: [`Happy to get into it properly. What's your week like for a short call?`],
+        l: [
+          `Appreciate the detail. Worth covering properly on a call rather than trying to squeeze it into a DM — 15 minutes and I can give you something actually useful based on your situation.\n\nWhat works this week?`,
+        ],
+      },
+      witty: {
+        s: [`Rather answer that properly. Got 10 min?`],
+        m: [`Rather answer that properly than half-answer it here. Got 10 min this week?`],
+        l: [
+          `Appreciate the detail. I could type out a wall of text, but a 15-minute call would actually answer this properly — happy to work around your calendar.\n\nWhat suits?`,
+        ],
+      },
     };
-    return pick(replies[tone] || replies.professional);
+    const bank = replies[tone] || replies.professional;
+    const len = ctx.matchLength || 's';
+    return pick(bank[len] || bank.s);
   }
 
   function buildObjectionReply(ctx, tone, goal) {
@@ -1055,22 +1097,44 @@
 
   function buildPositiveReply(ctx, tone, goal) {
     const replies = {
-      professional: [
-        `Good to hear. What works on your end for a short call next week?`,
-        `Glad that lands. I'm free most days next week for 15 minutes, what suits you?`,
-      ],
-      casual: [
-        `Nice. What's your week looking like for a quick call?`,
-        `Cool. Got 15 min this week?`,
-      ],
-      enthusiastic: [
-        `Good to hear. What does your week look like for a quick call?`,
-      ],
-      witty: [
-        `Glad that lands. What's the week looking like for a 15-min call?`,
-      ],
+      professional: {
+        s: [
+          `Good to hear. What works for a short call this week?`,
+          `Glad that lands. Got 15 minutes this week?`,
+        ],
+        m: [
+          `Good to hear. I'm free most days next week for 15 minutes — any slots that suit you?`,
+          `Glad that lands. Happy to find a time this week or next, just send over a couple of options that work.`,
+        ],
+        l: [
+          `Good to hear, thanks for the detail. Happy to take it forward — I'd suggest a short call so we can line things up properly rather than go back and forth here.\n\nI'm free most mornings this week and flexible next — anything work on your end?`,
+        ],
+      },
+      casual: {
+        s: [`Nice. Got 15 min this week?`, `Cool. What works this week?`],
+        m: [`Nice one. What's your week looking like for a quick call?`],
+        l: [
+          `Good to hear, thanks for the detail. Happy to take it forward — easier on a quick call than here. What's your week looking like?`,
+        ],
+      },
+      enthusiastic: {
+        s: [`Good to hear. Got 15 min this week?`],
+        m: [`Good to hear. What does your week look like for a quick call?`],
+        l: [
+          `Good to hear, thanks for the detail. Happy to move this forward — a short call would be the easiest next step, what works on your end?`,
+        ],
+      },
+      witty: {
+        s: [`Glad that lands. Got 15 min this week?`],
+        m: [`Glad that lands. What's the week looking like for a 15-min call?`],
+        l: [
+          `Glad that lands. Easier on a short call than ping-ponging in DMs — what's the week looking like?`,
+        ],
+      },
     };
-    return pick(replies[tone] || replies.professional);
+    const bank = replies[tone] || replies.professional;
+    const len = ctx.matchLength || 's';
+    return pick(bank[len] || bank.s);
   }
 
   function buildThankfulReply(ctx, tone, goal) {
@@ -1135,43 +1199,99 @@
   }
 
   function buildGeneralReply(ctx, tone, goal) {
-    // Topic-specific one-liners. No quoting, no hedging.
+    const len = ctx.matchLength || 's';
+
+    // Topic-specific replies. Short default; longer variants add real
+    // context when the partner wrote a lot.
     const topicResponses = {
-      job: `Sounds interesting — what does the role look like day-to-day?`,
-      meeting: `Sure, what works on your end this week?`,
-      product: `Worth a look — quickest way to see it in action?`,
-      collaboration: `Open to it. What did you have in mind?`,
-      pricing: `Happy to get into numbers on a short call — what works this week?`,
-      experience: `Appreciate you sharing. What are you focused on now?`,
+      job: {
+        s: `Sounds interesting — what does the role look like day-to-day?`,
+        m: `Sounds interesting. Would help to understand what the role looks like day-to-day and what the team's working on right now.`,
+        l: `Thanks for laying this out. A few things stand out as a good fit, though I'd want to understand the day-to-day and what success looks like in the first 6 months before committing either way.\n\nIs there a good time this week for a short call?`,
+      },
+      meeting: {
+        s: `Sure, what works on your end this week?`,
+        m: `Happy to find a time. I'm free most of this week and early next — anything suit on your end?`,
+        l: `Happy to find a time. I've got openings most mornings this week and flexibility next — send me two or three slots that suit and I'll confirm one.`,
+      },
+      product: {
+        s: `Worth a look — quickest way to see it in action?`,
+        m: `Worth a look. What's the quickest way to see it in action — a demo, a trial, or something else?`,
+        l: `Thanks for the detail, it does sound relevant to what I'm working on. Easiest next step would be seeing it in action — a short demo or a walkthrough of a live setup would be more useful than reading about it.\n\nWhat do you usually do for that?`,
+      },
+      collaboration: {
+        s: `Open to it. What did you have in mind?`,
+        m: `Open to it in principle. What did you have in mind and what would the split of the work look like?`,
+        l: `Open to it in principle. Would help to understand what you're picturing in terms of scope, the split of work, and what success looks like on each side before committing.\n\nHappy to jump on a short call to scope it out.`,
+      },
+      pricing: {
+        s: `Happy to get into numbers on a short call — what works this week?`,
+        m: `Happy to get into numbers. Easier on a call so I can tailor it to your setup rather than quote a generic figure — what works this week?`,
+        l: `Happy to get into numbers properly. Pricing depends on a couple of things specific to your setup (volume, integrations, timeline), so a generic figure here wouldn't be useful. A short call and I can give you something realistic.\n\nWhat suits this week?`,
+      },
+      experience: {
+        s: `Appreciate you sharing. What are you focused on now?`,
+        m: `Appreciate the context. What are you focused on now, and what's the next thing you're hoping to take on?`,
+        l: `Thanks for sharing that, good to have the background. What are you focused on now, and what's next on your side? Happy to compare notes if useful.`,
+      },
     };
 
     for (const topic of ctx.topics) {
       if (topicResponses[topic]) {
-        return applyToneVariations(topicResponses[topic], tone);
+        const bank = topicResponses[topic];
+        return applyToneVariations(bank[len] || bank.s, tone);
       }
     }
 
-    // No quoting the partner's message back at them — nobody wants that.
-    // One acknowledgment + one clear question.
+    // Fallback: acknowledgment + direct question. Longer tiers add one
+    // contextual beat rather than padding with quotes or fluff.
     const generics = {
-      professional: [
-        `Makes sense. What's the most useful next step on your end?`,
-        `Appreciate the context. What's shaping your thinking here?`,
-        `Understood. What's most important to you on this?`,
-      ],
-      casual: [
-        `Fair enough. What's the next step?`,
-        `Makes sense. What's driving that?`,
-      ],
-      enthusiastic: [
-        `Good to hear. What's next on your side?`,
-      ],
-      witty: [
-        `Okay, now I'm curious. What's behind it?`,
-      ],
+      professional: {
+        s: [
+          `Makes sense. What's the most useful next step on your end?`,
+          `Appreciate the context. What's shaping your thinking here?`,
+          `Understood. What's most important to you on this?`,
+        ],
+        m: [
+          `Makes sense, appreciate you laying it out. What's the most useful next step on your end?`,
+          `That tracks. Before suggesting anything, it'd help to know what's shaping your thinking here.`,
+        ],
+        l: [
+          `Thanks for taking the time to explain that properly, it helps. Rather than jump straight to a suggestion, I'd want to understand what's shaping your thinking and what a good outcome looks like on your end.\n\nHappy to jump on a short call if that's easier than typing it out.`,
+          `Appreciate the detail, that's useful context. A few things stand out, but I'd rather not pitch anything before understanding what you're actually optimising for.\n\nWhat would be the most useful next step for you?`,
+        ],
+      },
+      casual: {
+        s: [
+          `Fair enough. What's the next step?`,
+          `Makes sense. What's driving that?`,
+        ],
+        m: [
+          `Fair enough, appreciate the detail. What's the next step on your side?`,
+          `Makes sense. What's driving it, and what are you hoping to land on?`,
+        ],
+        l: [
+          `Thanks for laying that out. Before I throw ideas at you, what's driving it and what would a good outcome actually look like for you?\n\nHappy to jump on a quick call if easier.`,
+        ],
+      },
+      enthusiastic: {
+        s: [`Good to hear. What's next on your side?`],
+        m: [`Good to hear, appreciate the detail. What's next on your side?`],
+        l: [
+          `Thanks for the detail, good context. What's next on your side, and what would be most useful from me at this point?`,
+        ],
+      },
+      witty: {
+        s: [`Okay, now I'm curious. What's behind it?`],
+        m: [`Okay, now I'm properly curious. What's behind it and where do you want to take it?`],
+        l: [
+          `Appreciate the detail, now I'm properly curious. What's driving it and where are you hoping it lands?\n\nHappy to jump on a short call if easier than typing.`,
+        ],
+      },
     };
 
-    return pick(generics[tone] || generics.professional);
+    const bank = generics[tone] || generics.professional;
+    return pick(bank[len] || bank.s);
   }
 
   function blendWithExampleStyle(reply, profile, tone) {
