@@ -894,30 +894,44 @@
       product: ['product', 'service', 'platform', 'tool', 'solution', 'software', 'app'],
       collaboration: ['collaborate', 'partner', 'together', 'joint', 'co-', 'synergy'],
       gratitude: ['thanks', 'thank you', 'appreciate', 'grateful'],
-      interest: ['interested', 'curious', 'tell me more', 'love to know', 'sounds good', 'sounds great'],
+      interest: ['interested', 'curious', 'tell me more', 'love to know', 'sounds good', 'sounds great', 'sounds interesting', 'sound interesting', 'keen to', 'would love'],
       rejection: ['not interested', 'no thanks', 'pass', 'busy', 'not right now', 'not a good time'],
-      introduction: ['nice to meet', 'pleasure', 'connecting', 'connected', 'reaching out'],
+      introduction: ['nice to meet', 'pleasure', 'connect', 'connecting', 'connected', 'connection', 'reaching out', 'great to connect', 'good to connect'],
       pricing: ['price', 'cost', 'pricing', 'budget', 'how much', 'investment', 'plan'],
       experience: ['experience', 'background', 'worked at', 'years', 'expertise'],
       followup: ['following up', 'checking in', 'any update', 'thoughts on', 'did you get'],
     };
 
+    // Match keywords on word boundaries, not raw substrings — otherwise
+    // "appreciate" trips the product keyword "app", "payroll" trips "role",
+    // and so on, badly skewing topic/intent detection.
+    const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const mentions = (haystack, kw) => new RegExp('\\b' + escapeRe(kw) + '\\b', 'i').test(haystack);
     for (const [topic, keywords] of Object.entries(topicKeywords)) {
       for (const kw of keywords) {
-        if (text.includes(kw)) {
+        if (mentions(text, kw)) {
           ctx.topics.push(topic);
           break;
         }
       }
     }
 
-    // Detect intent
+    // Detect intent. Substantive topics (a job, a product, scheduling, a
+    // pricing question, etc.) take priority over opening pleasantries —
+    // otherwise a message like "Thanks for getting back to me. Here's the
+    // job description..." would be classified as a throwaway "thankful"
+    // reply just because it opens with "Thanks". Gratitude / greeting /
+    // introduction only win when the message is *only* a pleasantry.
+    const substantiveTopics = ['job', 'meeting', 'product', 'collaboration', 'pricing', 'experience'];
+    const hasSubstantive = ctx.topics.some(t => substantiveTopics.includes(t));
+
     if (ctx.questions.length > 0) ctx.lastIntent = 'question';
     else if (ctx.topics.includes('rejection')) ctx.lastIntent = 'objection';
+    else if (ctx.topics.includes('followup')) ctx.lastIntent = 'followup';
     else if (ctx.topics.includes('interest')) ctx.lastIntent = 'positive';
+    else if (hasSubstantive) ctx.lastIntent = 'statement'; // routed to buildGeneralReply, which picks the topic
     else if (ctx.topics.includes('gratitude')) ctx.lastIntent = 'thankful';
     else if (ctx.topics.includes('introduction')) ctx.lastIntent = 'greeting';
-    else if (ctx.topics.includes('followup')) ctx.lastIntent = 'followup';
     else ctx.lastIntent = 'statement';
 
     // Sentiment
