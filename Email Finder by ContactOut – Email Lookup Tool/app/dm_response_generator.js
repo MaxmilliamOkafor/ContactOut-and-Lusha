@@ -1197,21 +1197,6 @@
     return pick(replies[tone] || replies.professional);
   }
 
-  // Pull a short, human-sounding reference to the partner's last message so
-  // the reply reads as personal rather than boilerplate.
-  function referenceLastMessage(ctx) {
-    const last = ctx && ctx.lastMessage;
-    if (!last || !last.text) return '';
-    // Use the first complete sentence (or ~90 chars), trimmed.
-    const raw = last.text.replace(/\s+/g, ' ').trim();
-    if (raw.length < 12) return '';
-    let snippet = raw.split(/(?<=[.!?])\s+/)[0] || raw;
-    if (snippet.length > 90) snippet = snippet.slice(0, 87).trim() + '…';
-    // Drop trailing punctuation for cleaner inline quoting.
-    snippet = snippet.replace(/[.!?]+$/, '');
-    return snippet;
-  }
-
   function buildGeneralReply(ctx, tone, goal) {
     const len = ctx.matchLength || 's';
 
@@ -1309,24 +1294,15 @@
   }
 
   function blendWithExampleStyle(reply, profile, tone) {
-    // Use training examples as style guides — borrow phrases and patterns
+    // Apply only lightweight, tone-level lexical variation. We deliberately
+    // do NOT splice raw sentences from training examples into the reply:
+    // the previous implementation replaced the reply's closing line with a
+    // random sentence from a stored example, which produced out-of-context
+    // closers (e.g. swapping "Is there a good time this week for a short
+    // call?" for "Would Thursday work?" from an unrelated example). Cold
+    // outreach already uses example *content* via buildColdOutreach; for
+    // inbound replies, examples should influence tone, not content.
     if (!profile.examples || profile.examples.length === 0) return reply;
-
-    const example = pick(profile.examples);
-    if (!example.response) return reply;
-
-    // Extract signature phrases from examples (ending sentences)
-    const exSentences = example.response.split(/[.!?]+/).filter(s => s.trim().length > 15);
-    if (exSentences.length > 0 && Math.random() > 0.5) {
-      const styleSentence = pick(exSentences).trim();
-      // Append a relevant phrase from training data
-      const closers = reply.split('\n\n');
-      if (closers.length >= 2) {
-        closers[closers.length - 1] = styleSentence + '.';
-        reply = closers.join('\n\n');
-      }
-    }
-
     return applyToneVariations(reply, tone);
   }
 
