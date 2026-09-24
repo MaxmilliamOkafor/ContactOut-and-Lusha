@@ -107,7 +107,9 @@
       ],
       "js": ["/app/dm_response_generator.js"],
       "css": [],
-      "run_at": "document_end"
+      "run_at": "document_end",
+      "all_frames": true,
+      "match_about_blank": true
     },
     {
       "matches": [

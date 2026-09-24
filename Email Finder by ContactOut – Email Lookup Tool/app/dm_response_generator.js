@@ -684,17 +684,22 @@
   // The signed-in user's name, from the global-nav avatar's alt text.
   function getMyName() {
     const strip = alt => cleanPersonName(String(alt || '').replace(/^(photo|picture|image) of\s+/i, ''));
-    const img = document.querySelector(
-      'img.global-nav__me-photo, .global-nav__me img, img[class*="global-nav__me-photo"]'
-    );
-    const direct = img && strip(img.getAttribute('alt'));
-    if (looksLikeRealName(direct)) return direct;
-    // Layouts without those classes: the avatar in the "Me" nav item.
-    for (const el of document.querySelectorAll('header a, header button, nav a, nav button')) {
-      if (!/^me\b/i.test((el.innerText || '').trim())) continue;
-      const av = el.querySelector('img[alt]');
-      const n = av && strip(av.getAttribute('alt'));
-      if (looksLikeRealName(n) && !/^me$/i.test(n)) return n;
+    // In the messaging iframe the nav bar is in the top document.
+    const top = topWindow();
+    const docs = top ? [document, top.document] : [document];
+    for (const doc of docs) {
+      const img = doc.querySelector(
+        'img.global-nav__me-photo, .global-nav__me img, img[class*="global-nav__me-photo"]'
+      );
+      const direct = img && strip(img.getAttribute('alt'));
+      if (looksLikeRealName(direct)) return direct;
+      // Layouts without those classes: the avatar in the "Me" nav item.
+      for (const el of doc.querySelectorAll('header a, header button, nav a, nav button')) {
+        if (!/^me\b/i.test((el.innerText || '').trim())) continue;
+        const av = el.querySelector('img[alt]');
+        const n = av && strip(av.getAttribute('alt'));
+        if (looksLikeRealName(n) && !/^me$/i.test(n)) return n;
+      }
     }
     return '';
   }
@@ -2400,8 +2405,26 @@
     for (const sr of shadowRoots) observer.observe(sr, { childList: true, subtree: true });
   }
 
+  // The top LinkedIn window, when this frame may read it (same origin).
+  function topWindow() {
+    try {
+      if (window.top && window.top !== window && window.top.location.hostname) return window.top;
+    } catch (e) { /* cross-origin frame */ }
+    return null;
+  }
+
   function init() {
-    if (!location.hostname.includes('linkedin.com')) return;
+    // Runs in every LinkedIn frame (manifest all_frames): LinkedIn now
+    // renders the messaging page and chat bubbles inside a same-origin
+    // iframe (/preload/?_bprMode=vanilla) that a top-frame-only script
+    // can't see. about:blank / srcdoc frames have no hostname of their
+    // own, so check the top window's.
+    const top = topWindow();
+    const host = location.hostname || (top ? top.location.hostname : '');
+    if (!host.includes('linkedin.com')) return;
+    // Guard against a second init in the same frame.
+    if (window.__outreachDmInit) return;
+    window.__outreachDmInit = true;
     log('🚀 Initializing AI DM Response Generator v2');
     injectDMStyles();
     attachActiveScopeTracking();
@@ -2423,10 +2446,16 @@
     setInterval(injectAIReplyButton, 3000);
 
     // Watch URL changes (LinkedIn is an SPA)
-    lastMsgUrl = location.href;
+    // Inside the messaging iframe our own URL never changes; the thread URL
+    // lives on the top window. Watch both.
+    const currentUrl = () => {
+      const t = topWindow();
+      return location.href + '|' + (t ? t.location.href : '');
+    };
+    lastMsgUrl = currentUrl();
     setInterval(() => {
-      if (location.href !== lastMsgUrl) {
-        lastMsgUrl = location.href;
+      if (currentUrl() !== lastMsgUrl) {
+        lastMsgUrl = currentUrl();
         // Drop any stale composer reference from the previous page/conv.
         lastActiveComposer = null;
         // The panel was built for the previous conversation — close it.
