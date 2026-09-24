@@ -23,7 +23,8 @@
   const DEFAULT_PROFILE_KEY = 'outreach_dm_default_profile';
 
   // Set to true to trace scraping/injection in the page console.
-  const DEBUG = false;
+  // Turn on from the page console: localStorage.setItem('outreachDmDebug', '1')
+  const DEBUG = (() => { try { return localStorage.getItem('outreachDmDebug') === '1'; } catch (e) { return false; } })();
   function log(...args) {
     if (DEBUG) console.log('[OutreachPro DM]', ...args);
   }
@@ -49,7 +50,9 @@
     '.msg-form__contenteditable div[contenteditable="true"], ' +
     '.msg-form__contenteditable, ' +
     '.msg-form [contenteditable="true"], ' +
-    'div[contenteditable="true"][class*="msg"]';
+    'div[contenteditable="true"][class*="msg"], ' +
+    '[data-outreach-dm-unit] [contenteditable="true"], ' +
+    '[data-outreach-dm-unit] textarea';
 
   function attachActiveScopeTracking() {
     if (activeScopeListenerAttached) return;
@@ -518,6 +521,135 @@
   //  3. CONVERSATION SCRAPER (Robust v3)
   //  3 strategies to handle LinkedIn DOM changes
   // ═══════════════════════════════════════════
+  // ─── Class-name-free chat detection ───
+  // LinkedIn renames its CSS classes from time to time, and when the
+  // msg-form / msg-s-* classes change the button silently disappears. These
+  // helpers find a chat the way a person would instead: an editable message
+  // box with a "Send" button next to it.
+  const UNIT_ATTR = 'data-outreach-dm-unit';
+  // Editors that are not chats: feed posts/comments, invitation notes, search.
+  const NOT_A_CHAT = /comment|post|share your thoughts|what do you want to talk about|add a note|search/i;
+
+  function isVisible(el) {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+
+  function isSendButton(b) {
+    if (!b || b.classList.contains(AI_BTN_CLASS)) return false;
+    const label = (b.getAttribute('aria-label') || '').trim();
+    const text = (b.innerText || b.textContent || '').trim();
+    return /^send( message| reply)?$/i.test(text) || /^send( message| reply)?$/i.test(label);
+  }
+
+  // [{ unit, composer, sendBtn }] for every visible chat composer.
+  function findSemanticComposers() {
+    const out = [];
+    for (const ed of deepQueryAll('[contenteditable="true"], textarea')) {
+      if (!isVisible(ed) || ed.closest('#' + PANEL_ID)) continue;
+      if (ed.parentElement && ed.parentElement.closest('[contenteditable="true"]')) continue; // inner node of an editor
+      const label = ['aria-label', 'aria-placeholder', 'data-placeholder', 'placeholder']
+        .map(a => ed.getAttribute(a) || '').join(' ');
+      if (NOT_A_CHAT.test(label)) continue;
+      // Smallest container that holds both the editor and a Send button.
+      let cur = ed.parentElement;
+      for (let i = 0; i < 8 && cur && cur !== document.body; i++, cur = cur.parentElement) {
+        const sendBtn = [...cur.querySelectorAll('button')].find(isSendButton);
+        if (sendBtn) {
+          out.push({ unit: cur, composer: ed, sendBtn });
+          break;
+        }
+      }
+    }
+    return out;
+  }
+
+  // Where the button goes: the toolbar row holding Send and the attach /
+  // GIF / emoji buttons — in its left-hand group when it has one.
+  function toolbarAnchor(unit, sendBtn) {
+    let row = sendBtn.parentElement;
+    while (row && row !== unit && row.querySelectorAll('button').length < 3) row = row.parentElement;
+    if (!row || row === unit) return sendBtn.parentElement;
+    const left = [...row.children].find(ch => ch.querySelector && ch.querySelector('button') && !ch.contains(sendBtn));
+    return left || row;
+  }
+
+  // The open conversation around a composer, found by position: climb while
+  // the container stays in the composer's column. The next level up would
+  // take in the inbox list (full page) or other chat bubbles (overlay).
+  function paneFor(composer) {
+    if (!composer || !composer.isConnected) return null;
+    const c = composer.getBoundingClientRect();
+    if (!c.width) return null;
+    let best = null;
+    for (let cur = composer.parentElement, i = 0; cur && cur !== document.body && i < 25; cur = cur.parentElement, i++) {
+      const r = cur.getBoundingClientRect();
+      if (r.left < c.left - 48 || r.right > c.right + 96) break;
+      best = cur;
+    }
+    return best;
+  }
+
+  // "Maxmilliam Okafor" → name; "Let's meet at" → '' (names are capitalised).
+  function nameLike(s) {
+    const n = cleanPersonName(String(s || '').replace(/\b(premium|verified|view .*profile)\b/gi, ' '));
+    if (!looksLikeRealName(n)) return '';
+    const words = n.split(' ');
+    if (words.length > 5) return '';
+    const particle = /^(de|da|di|del|der|den|van|von|le|la|bin|al|el|du|dos|das|y)$/i;
+    return words.every(w => particle.test(w) || /^\p{Lu}/u.test(w)) ? n : '';
+  }
+
+  // Read a conversation from its visible text. Each message group starts
+  // with a header line — "Maxmilliam Okafor • 2:16 PM" (or the name and
+  // time on two lines, or LinkedIn's screen-reader "… sent the following
+  // message at 2:16 PM") — and date headings like "SEP 15" / "TODAY"
+  // separate days.
+  function parseChatText(text) {
+    const TIME = '\\d{1,2}:\\d{2}\\s?(?:[AaPp]\\.?[Mm]\\.?)?';
+    const headerOneLine = new RegExp('^(.+?)(?:\\s*[•·]\\s*|\\s+sent the following messages? at\\s+|\\s+)(' + TIME + ')$', 'i');
+    const timeOnly = new RegExp('^[•·]?\\s*' + TIME + '$', 'i');
+    const DATE_HEADING = /^(today|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun|(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(,?\s+\d{4})?)$/i;
+    const NOISE = /^(seen|sent|delivered|read)\b.*|^view .+ profile$|^(active now|online|typing\.*|send|gif|write a message…?|press enter to send\.?)$/i;
+
+    const lines = text.split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const groups = [];
+    let cur = null;
+    const start = sender => {
+      if (cur && !cur.lines.length) {
+        if (sameName(cur.sender, sender)) return; // screen-reader + visible header
+        groups.pop();
+      }
+      cur = { sender, lines: [] };
+      groups.push(cur);
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (DATE_HEADING.test(line) || NOISE.test(line)) continue;
+
+      const m = line.match(headerOneLine);
+      if (m && /[•·]|sent the following|[ap]\.?m\.?$/i.test(line) && nameLike(m[1])) {
+        start(nameLike(m[1]));
+        continue;
+      }
+      if (timeOnly.test(line)) {
+        // Name on the previous line, time on this one.
+        const prev = lines[i - 1] || '';
+        const nm = nameLike(prev);
+        if (nm) {
+          if (cur && cur.lines[cur.lines.length - 1] === prev) cur.lines.pop();
+          start(nm);
+        }
+        continue;
+      }
+      if (!cur) continue; // header / profile card above the first message
+      if (!cur.lines.length && sameName(line, cur.sender)) continue;
+      cur.lines.push(line);
+    }
+    return groups.filter(g => g.lines.length).map(g => ({ sender: g.sender, text: g.lines.join('\n') }));
+  }
+
   // Visible text of an element. innerText keeps paragraph breaks
   // ("review:\nhttps://…"), where textContent glues paragraphs together.
   // innerText is empty for hidden nodes, so fall back to textContent.
@@ -551,10 +683,20 @@
 
   // The signed-in user's name, from the global-nav avatar's alt text.
   function getMyName() {
+    const strip = alt => cleanPersonName(String(alt || '').replace(/^(photo|picture|image) of\s+/i, ''));
     const img = document.querySelector(
       'img.global-nav__me-photo, .global-nav__me img, img[class*="global-nav__me-photo"]'
     );
-    return cleanPersonName(img ? (img.getAttribute('alt') || '') : '');
+    const direct = img && strip(img.getAttribute('alt'));
+    if (looksLikeRealName(direct)) return direct;
+    // Layouts without those classes: the avatar in the "Me" nav item.
+    for (const el of document.querySelectorAll('header a, header button, nav a, nav button')) {
+      if (!/^me\b/i.test((el.innerText || '').trim())) continue;
+      const av = el.querySelector('img[alt]');
+      const n = av && strip(av.getAttribute('alt'));
+      if (looksLikeRealName(n) && !/^me$/i.test(n)) return n;
+    }
+    return '';
   }
 
   function sameName(a, b) {
@@ -585,7 +727,7 @@
     return out;
   }
 
-  function scrapeConversation(scope) {
+  function scrapeConversation(scope, composer) {
     const messages = [];
     const root = (scope && scope.isConnected) ? scope : document;
     const myName = getMyName();
@@ -627,6 +769,40 @@
         messages.push({ text, sender: currentSender || 'Unknown', isMe: whoIsIt(currentSender, item) });
       });
       if (messages.length) log('Scraper: bare items', messages.length);
+    }
+
+    // ─── Strategy 1c: read the open chat from its visible text. Works when
+    // LinkedIn's message classes change: the pane is found by position
+    // around the composer, messages by their "Name • time" headers. ───
+    let pane = null;
+    let paneTitle = '';
+    let paneCompany = '';
+    if (messages.length === 0 && composer && composer.isConnected) {
+      pane = paneFor(composer);
+      if (pane) {
+        let text = readText(pane);
+        // Drop the composer + toolbar at the bottom (and any draft in it).
+        let unit = composer.closest('[' + UNIT_ATTR + ']') || composer;
+        const tail = readText(unit);
+        const cut = tail ? text.lastIndexOf(tail) : -1;
+        if (cut > 0) text = text.slice(0, cut);
+
+        const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+        // The pane's first name-like line is the conversation title.
+        paneTitle = lines.slice(0, 4).map(nameLike).find(n => n && !(myName && sameName(n, myName))) || '';
+        const firstHeader = lines.findIndex(l => /\d{1,2}:\d{2}/.test(l));
+        const intro = lines.slice(0, firstHeader > 0 ? firstHeader : 8);
+        const co = intro.map(l => l.match(/(?:\s(?:at)\s|\s?@\s?)([^|,•·\n]{2,40})/i)).find(Boolean);
+        if (co) paneCompany = co[1].trim().replace(/[.\s]+$/, '');
+
+        for (const g of parseChatText(text)) {
+          let isMe = null;
+          if (myName) isMe = sameName(g.sender, myName);
+          else if (paneTitle) isMe = !sameName(g.sender, paneTitle);
+          messages.push({ text: g.text, sender: g.sender, isMe });
+        }
+        if (messages.length) log('Scraper: visible-text reader', messages.length, 'title:', paneTitle);
+      }
     }
 
     // ─── Strategy 2: message list container, paragraph by paragraph ───
@@ -697,8 +873,11 @@
       }
     }
 
+    // 3. The title of the open chat pane.
+    if (!partnerName && paneTitle) partnerName = paneTitle;
+
     // ─── Partner's company, from their headline ("… at Optum", "… @ AWS") ───
-    let partnerCompany = '';
+    let partnerCompany = paneCompany;
     const headlineSelectors = [
       '.msg-entity-lockup__entity-info',
       '.msg-thread__subtitle',
@@ -706,7 +885,7 @@
       '.msg-s-profile-card .artdeco-entity-lockup__subtitle',
     ];
     outerCo:
-    for (const container of containers) {
+    for (const container of (partnerCompany ? [] : containers)) {
       for (const sel of headlineSelectors) {
         const el = container.querySelector(sel);
         const m = el && readText(el).split('\n')[0].match(/(?:\s(?:at)\s|\s?@\s?)([^|,•·\n]{2,40})/i);
@@ -722,10 +901,14 @@
     let lastMessage = null;
     let lastFromMe = false;
     let myOpener = '';
+    let myLatest = '';
+    let myMessagesText = '';
 
     if (senderKnown) {
       const mine = messages.filter(m => m.isMe === true);
       myOpener = mine.length ? mine[0].text : '';
+      myLatest = mine.length ? mine[mine.length - 1].text : '';
+      myMessagesText = mine.map(m => m.text).join('\n');
       lastFromMe = messages.length > 0 && messages[messages.length - 1].isMe === true;
 
       // The partner's latest "turn": their consecutive messages, most
@@ -764,6 +947,8 @@
       partnerCompany,
       lastFromMe,
       myOpener,
+      myLatest,
+      myMessagesText,
     };
   }
 
@@ -799,6 +984,8 @@
     const context = analyzeConversation(allMessages, lastMsg);
     context.partnerCompany = conversation.partnerCompany || '';
     context.myOpener = conversation.myOpener || '';
+    context.myLatest = conversation.myLatest || '';
+    context.myMessagesText = conversation.myMessagesText || '';
     // I sent the last message and they haven't replied: write a follow-up,
     // not a reply to their older message.
     if (conversation.lastFromMe) {
@@ -1174,18 +1361,32 @@
     return parts.join(' ') + '\n\n' + closer;
   }
 
-  // Why did I reach out in the first place? Read from my opening message,
-  // so "how can I help?" gets a real answer instead of a dodge.
-  function outreachPurpose(myOpener) {
-    const o = (myOpener || '').toLowerCase();
+  // What I said I'm looking for: "…looking for Backend or Platform
+  // Engineering roles in Europe" → "Backend or Platform Engineering roles in Europe".
+  function extractSeeking(text) {
+    const m = (text || '').match(/\b(?:looking for|seeking|exploring|open to)\s+(?:new\s+)?([^.!?\n]{3,80}?\b(?:roles?|positions?|opportunities|jobs?)\b(?:\s+(?:in|across|within|at)\s+[A-Z][\w&.' -]{1,30}?(?=[.,!?\n]|$))?)/i);
+    return m ? m[1].replace(/\s+/g, ' ').trim() : '';
+  }
+
+  // Why did I reach out? Read from my own messages (latest first, then my
+  // opener), so "how can I help?" gets a real answer instead of a dodge.
+  function specificPurpose(text) {
+    const o = (text || '').toLowerCase();
+    if (!o) return '';
+    if (extractSeeking(text)) return 'whether there might be a fit for me on your team';
     if (/collaborat|partner(ship)?\b|work together/.test(o)) return 'whether there might be a way for us to collaborate';
     if (/\b(role|position|job|opening|opportunit\w*|hiring|vacanc\w*)\b/.test(o)) return 'whether there might be a fit for me on your team';
     if (/\b(advice|insight|perspective|learn|mentor\w*)\b/.test(o)) return "get your perspective on a couple of things I'm working on";
-    return "whether there's a way we could help each other";
+    return '';
+  }
+
+  function outreachPurpose(ctx) {
+    return specificPurpose(ctx.myLatest) || specificPurpose(ctx.myOpener)
+      || "whether there's a way we could help each other";
   }
 
   function buildOfferReply(ctx, tone) {
-    const purpose = outreachPurpose(ctx.myOpener);
+    const purpose = outreachPurpose(ctx);
     const where = ctx.partnerCompany ? ` at ${ctx.partnerCompany}` : '';
     const replies = {
       professional: `Thanks, appreciate that. I'd like to hear a bit more about what you're working on${where} and see ${purpose}.\n\nWould you be open to a quick 15-minute call this week?`,
@@ -1198,6 +1399,17 @@
 
   // I sent the last message and haven't heard back.
   function buildNudgeReply(ctx, tone) {
+    // Remind them what I'm after, in my own words, when I said it.
+    const seeking = extractSeeking(ctx.myMessagesText);
+    if (seeking) {
+      const personal = {
+        professional: `Just following up on my note above in case it got buried. If you're hiring for ${seeking}, I'd be glad to have a quick chat.`,
+        casual: `Just bumping this in case it got buried. If you're hiring for ${seeking}, I'd be keen to chat.`,
+        enthusiastic: `Just following up on my note above in case it got buried. If you're hiring for ${seeking}, I'd be glad to have a quick chat.`,
+        witty: `Bumping this up before it sinks. If you're hiring for ${seeking}, I'd be glad to have a quick chat.`,
+      };
+      return personal[tone] || personal.professional;
+    }
     const replies = {
       professional: [
         'Just following up on my note above in case it got buried. Would be good to connect if you have a moment this week.',
@@ -1620,9 +1832,9 @@
   // button, so this is exact; the floating fallback button uses the composer
   // the user last typed in.
   function composerFor(btn) {
-    const form = btn && btn.closest ? btn.closest(MSG_FORM_SELECTOR) : null;
-    const inForm = form && form.querySelector('[contenteditable="true"]');
-    if (inForm) return inForm;
+    const unit = btn && btn.closest ? btn.closest('[' + UNIT_ATTR + '], ' + MSG_FORM_SELECTOR) : null;
+    const inUnit = unit && unit.querySelector('[contenteditable="true"], textarea');
+    if (inUnit) return inUnit;
     if (lastActiveComposer && lastActiveComposer.isConnected) return lastActiveComposer;
     return null;
   }
@@ -1630,7 +1842,7 @@
   // Conversation scope + composer for an action started from `btn`.
   function resolveTarget(btn) {
     const composer = composerFor(btn);
-    const scope = closestScope(btn) || closestScope(composer) || findActiveScope(null);
+    const scope = closestScope(btn) || closestScope(composer) || paneFor(composer) || findActiveScope(null);
     return { scope, composer };
   }
 
@@ -1646,9 +1858,15 @@
     try {
       const profile = await getActiveProfile();
       const { scope, composer } = resolveTarget(btn);
-      const conversation = scrapeConversation(scope);
+      const conversation = scrapeConversation(scope, composer);
+      // What was read — senders and lengths only, never message text.
+      log('Draft for', conversation.partnerName, '| composer found:', !!composer,
+        '| messages:', conversation.messages.map(m => `${m.isMe ? 'me' : m.isMe === false ? 'them' : '?'}:${m.text.length}ch`).join(' '));
       const reply = generateResponse(profile, conversation);
       insertIntoMessageBox(reply, scope, composer);
+      if (!conversation.messages.length) {
+        showDMToast("Couldn't read this chat's messages, so this is a first-message draft.", 'error');
+      }
     } catch (err) {
       console.error('[OutreachPro DM] Draft error:', err);
       showDMToast('Could not generate reply. Try again.', 'error');
@@ -1683,7 +1901,21 @@
       if (!anchor) continue;
       const rootNode = form.getRootNode();
       if (rootNode !== document) ensureStylesIn(rootNode);
+      form.setAttribute(UNIT_ATTR, '1');
       anchor.prepend(createAIButton());
+      added++;
+    }
+
+    // Chats LinkedIn renders without the msg-form classes: an editable box
+    // with a Send button next to it.
+    for (const { unit, sendBtn } of findSemanticComposers()) {
+      if (unit.querySelector('.' + AI_BTN_CLASS)) continue;
+      const known = unit.closest('[' + UNIT_ATTR + ']');
+      if (known && known.querySelector('.' + AI_BTN_CLASS)) continue;
+      const rootNode = unit.getRootNode();
+      if (rootNode !== document) ensureStylesIn(rootNode);
+      unit.setAttribute(UNIT_ATTR, '1');
+      toolbarAnchor(unit, sendBtn).prepend(createAIButton());
       added++;
     }
     if (added) log('Injected AI Reply into', added, 'composer(s)');
@@ -1691,7 +1923,7 @@
     // Floating fallback: only when a chat composer exists that we could not
     // anchor into (e.g. LinkedIn changed its markup). Never on pages with no
     // chat open.
-    const anchored = forms.some(f => f.querySelector('.' + AI_BTN_CLASS + ':not(.floating)'));
+    const anchored = deepQueryAll('.' + AI_BTN_CLASS + ':not(.floating)').length > 0;
     const floating = document.querySelector('.' + AI_BTN_CLASS + '.floating');
     const looseComposer = deepQuery(
       '.msg-form__contenteditable, [class*="msg-form"] [contenteditable="true"]'
@@ -1725,7 +1957,8 @@
     const activeProfile = await getActiveProfile();
     // The panel belongs to the chat whose AI Reply button opened it.
     const target = () => resolveTarget(originBtn);
-    const conversation = scrapeConversation(target().scope);
+    const initial = target();
+    const conversation = scrapeConversation(initial.scope, initial.composer);
 
     const panel = document.createElement('div');
     panel.id = PANEL_ID;
@@ -1815,7 +2048,8 @@
       try { chrome.storage.local.set({ [DEFAULT_PROFILE_KEY]: profile.id }); } catch (e) { /* ignore */ }
 
       // Re-scrape at click time: new messages may have arrived.
-      const freshConv = scrapeConversation(target().scope);
+      const live = target();
+      const freshConv = scrapeConversation(live.scope, live.composer);
 
       setTimeout(() => {
         const reply = generateResponse(profile, freshConv);
@@ -1852,6 +2086,8 @@
       '.msg-form__contenteditable div[contenteditable="true"]',
       '.msg-form [contenteditable="true"]',
       'div[contenteditable="true"][aria-label*="Write a message"]',
+      '[' + UNIT_ATTR + '] [contenteditable="true"]',
+      '[' + UNIT_ATTR + '] textarea',
     ];
     const attached = el => !!(el && el.isConnected);
 
@@ -1893,6 +2129,14 @@
   // sees a genuine edit (draft saved, Send button enabled). If it's
   // unavailable, build paragraphs by hand and fire an input event.
   function writeIntoComposer(box, text) {
+    if (box.tagName === 'TEXTAREA') {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+      box.focus();
+      setter.call(box, text);
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+      box.dispatchEvent(new Event('change', { bubbles: true }));
+      return;
+    }
     box.focus();
     const sel = window.getSelection();
     let ok = false;
@@ -2127,8 +2371,10 @@
               relevant = true;
               break;
             }
-            // A new shadow host (e.g. LinkedIn's #interop-outlet)
-            if (node.shadowRoot || node.id === 'interop-outlet') {
+            // A new shadow host (e.g. LinkedIn's #interop-outlet), or a new
+            // editor whatever LinkedIn calls its classes this month.
+            if (node.shadowRoot || node.id === 'interop-outlet' || node.isContentEditable ||
+                (node.querySelector && node.querySelector('[contenteditable="true"]'))) {
               relevant = true;
               break;
             }
