@@ -2,7 +2,7 @@
  * OutreachPro — AI DM Response Generator v2
  *
  * Inspired by Auto Gmail's injection patterns:
- *   • waitForElement with MutationObserver (not polling)
+ *   • MutationObserver-driven injection (incl. chats inside shadow roots)
  *   • Shadow DOM isolated UI (no CSS conflicts with LinkedIn)
  *   • Robust multi-strategy button injection
  *   • Context-aware conversation scraping
@@ -55,13 +55,63 @@
     if (activeScopeListenerAttached) return;
     activeScopeListenerAttached = true;
     const onActivity = (e) => {
-      const t = e.target;
+      // composedPath()[0] is the real target even inside a shadow root
+      // (e.target is retargeted to the shadow host at document level).
+      const t = (e.composedPath && e.composedPath()[0]) || e.target;
       if (!t || t.nodeType !== 1) return;
       const composer = t.closest && t.closest(COMPOSER_SELECTOR);
       if (composer) lastActiveComposer = composer;
     };
     document.addEventListener('focusin', onActivity, true);
     document.addEventListener('click', onActivity, true);
+  }
+
+  // ─── Shadow DOM support ───
+  // Newer LinkedIn pages render chat pop-ups inside an open shadow root
+  // (#interop-outlet). document.querySelector can't see into it and
+  // document.contains() is false for nodes inside it, which made the
+  // extension miss those chats entirely and fall back to the clipboard.
+  // All chat lookups go through these helpers instead.
+  const shadowRoots = new Set();
+
+  function syncShadowRoots() {
+    for (const r of shadowRoots) if (!r.host || !r.host.isConnected) shadowRoots.delete(r);
+    if (!document.body) return;
+    const queue = [document.body, ...shadowRoots];
+    while (queue.length) {
+      const walker = document.createTreeWalker(queue.shift(), NodeFilter.SHOW_ELEMENT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        const sr = n.shadowRoot;
+        if (sr && !shadowRoots.has(sr)) {
+          shadowRoots.add(sr);
+          onNewShadowRoot(sr);
+          queue.push(sr);
+        }
+      }
+    }
+  }
+
+  function onNewShadowRoot(sr) {
+    // Mutations inside a shadow root don't reach the document observer.
+    if (observer) observer.observe(sr, { childList: true, subtree: true });
+    ensureStylesIn(sr);
+  }
+
+  // Page CSS doesn't apply inside a shadow root: copy our stylesheet in.
+  function ensureStylesIn(root) {
+    const src = document.getElementById('outreach-dm-ai-css');
+    if (!src || !root.getElementById || root.getElementById('outreach-dm-ai-css')) return;
+    root.appendChild(src.cloneNode(true));
+  }
+
+  function deepQueryAll(selector) {
+    const out = new Set(document.querySelectorAll(selector));
+    for (const r of shadowRoots) r.querySelectorAll(selector).forEach(el => out.add(el));
+    return [...out];
+  }
+
+  function deepQuery(selector) {
+    return document.querySelector(selector) || deepQueryAll(selector)[0] || null;
   }
 
   // Walk up from a node to the nearest chat-bubble / thread container.
@@ -83,13 +133,13 @@
     if (fromOrigin) return fromOrigin;
 
     // 2. The composer the user last typed in.
-    if (lastActiveComposer && document.contains(lastActiveComposer)) {
+    if (lastActiveComposer && lastActiveComposer.isConnected) {
       const fromComposer = closestScope(lastActiveComposer);
       if (fromComposer) return fromComposer;
     }
 
     // 3. Any open, non-minimized overlay bubble.
-    const bubbles = document.querySelectorAll(
+    const bubbles = deepQueryAll(
       '.msg-overlay-conversation-bubble, div[class*="msg-overlay-conversation-bubble"]'
     );
     for (const b of bubbles) {
@@ -100,36 +150,10 @@
     }
 
     // 4. Full messaging page thread.
-    const thread = document.querySelector('.msg-thread, div[class*="messaging-thread"]');
+    const thread = deepQuery('.msg-thread, div[class*="messaging-thread"]');
     if (thread) return thread;
 
     return null;
-  }
-
-  // ═══════════════════════════════════════════
-  //  0. WAIT-FOR-ELEMENT (Auto Gmail pattern)
-  //  Uses MutationObserver to resolve when a selector appears
-  // ═══════════════════════════════════════════
-  function waitForElement(selector, { timeout = 15000, parent = document.body } = {}) {
-    return new Promise((resolve, reject) => {
-      const el = parent.querySelector(selector);
-      if (el) return resolve(el);
-
-      const obs = new MutationObserver(() => {
-        const found = parent.querySelector(selector);
-        if (found) {
-          obs.disconnect();
-          resolve(found);
-        }
-      });
-
-      obs.observe(parent, { childList: true, subtree: true });
-
-      setTimeout(() => {
-        obs.disconnect();
-        reject(new Error(`waitForElement timeout: ${selector}`));
-      }, timeout);
-    });
   }
 
   // ═══════════════════════════════════════════
@@ -563,7 +587,7 @@
 
   function scrapeConversation(scope) {
     const messages = [];
-    const root = (scope && document.contains(scope)) ? scope : document;
+    const root = (scope && scope.isConnected) ? scope : document;
     const myName = getMyName();
     // LinkedIn marks messages from the other person with --other on some
     // layouts; used when the sender name can't be compared.
@@ -1560,7 +1584,7 @@
 
   // ═══════════════════════════════════════════
   //  5. UI — AI REPLY BUTTON INJECTION
-  //  Multi-strategy with Auto Gmail-style waitForElement
+  //  One button per chat composer
   // ═══════════════════════════════════════════
   // A chat composer is LinkedIn's messaging form. Generic contenteditable
   // textboxes are deliberately NOT treated as composers: the feed's post and
@@ -1599,7 +1623,7 @@
     const form = btn && btn.closest ? btn.closest(MSG_FORM_SELECTOR) : null;
     const inForm = form && form.querySelector('[contenteditable="true"]');
     if (inForm) return inForm;
-    if (lastActiveComposer && document.contains(lastActiveComposer)) return lastActiveComposer;
+    if (lastActiveComposer && lastActiveComposer.isConnected) return lastActiveComposer;
     return null;
   }
 
@@ -1637,7 +1661,8 @@
   }
 
   function findMsgForms() {
-    return [...document.querySelectorAll(MSG_FORM_SELECTOR)]
+    syncShadowRoots();
+    return deepQueryAll(MSG_FORM_SELECTOR)
       .filter(f => f.querySelector('[contenteditable="true"]'));
   }
 
@@ -1656,6 +1681,8 @@
         form.querySelector('div[class*="msg-form__footer"]') ||
         (sendBtn && sendBtn.parentElement);
       if (!anchor) continue;
+      const rootNode = form.getRootNode();
+      if (rootNode !== document) ensureStylesIn(rootNode);
       anchor.prepend(createAIButton());
       added++;
     }
@@ -1666,7 +1693,7 @@
     // chat open.
     const anchored = forms.some(f => f.querySelector('.' + AI_BTN_CLASS + ':not(.floating)'));
     const floating = document.querySelector('.' + AI_BTN_CLASS + '.floating');
-    const looseComposer = document.querySelector(
+    const looseComposer = deepQuery(
       '.msg-form__contenteditable, [class*="msg-form"] [contenteditable="true"]'
     );
     if (anchored || !looseComposer) {
@@ -1826,7 +1853,7 @@
       '.msg-form [contenteditable="true"]',
       'div[contenteditable="true"][aria-label*="Write a message"]',
     ];
-    const attached = el => el && document.contains(el);
+    const attached = el => !!(el && el.isConnected);
 
     // 1. The composer of the chat the button belongs to (exact).
     let box = attached(composer) ? composer : null;
@@ -1839,8 +1866,17 @@
     }
     // 3. The composer the user last typed in.
     if (!box && attached(lastActiveComposer)) box = lastActiveComposer;
-    // Deliberately no document-wide fallback: guessing could write into
-    // another chat (or the feed's post box). Copy instead.
+    // 4. The only visible chat composer on the page — safe because it's
+    //    unambiguous. With two or more chats open we never guess.
+    if (!box) {
+      syncShadowRoots();
+      const visible = deepQueryAll(boxSelectors.join(', ')).filter(el => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      });
+      if (visible.length === 1) box = visible[0];
+    }
+    // Last resort only: copy so nothing is lost.
     if (!box) {
       copyToClipboard(text);
       showDMToast('📋 Copied to clipboard — paste it in the message box!', 'success');
@@ -1859,13 +1895,14 @@
   function writeIntoComposer(box, text) {
     box.focus();
     const sel = window.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(box);
-    sel.removeAllRanges();
-    sel.addRange(range);
-
     let ok = false;
-    try { ok = document.execCommand('insertText', false, text); } catch (e) { ok = false; }
+    try {
+      // Select the editor's existing content (the stale draft). selectAll
+      // acts on the focused editor, which also works inside shadow roots
+      // where a Range built from outside may not take.
+      document.execCommand('selectAll', false, null);
+      ok = document.execCommand('insertText', false, text);
+    } catch (e) { ok = false; }
 
     const normalize = s => (s || '').replace(/\s+/g, ' ').trim();
     if (ok && normalize(box.innerText).includes(normalize(text).slice(0, 40))) return;
@@ -2074,7 +2111,6 @@
   // ═══════════════════════════════════════════
   //  10. OBSERVER & INIT
   //  Auto Gmail-inspired: debounced MutationObserver
-  //  + waitForElement for initial load
   // ═══════════════════════════════════════════
   function startObserving() {
     if (observer) observer.disconnect();
@@ -2088,6 +2124,11 @@
           if (node.nodeType === 1) {
             const cl = node.className || '';
             if (typeof cl === 'string' && (cl.includes('msg') || cl.includes('message') || cl.includes('overlay'))) {
+              relevant = true;
+              break;
+            }
+            // A new shadow host (e.g. LinkedIn's #interop-outlet)
+            if (node.shadowRoot || node.id === 'interop-outlet') {
               relevant = true;
               break;
             }
@@ -2110,6 +2151,7 @@
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
+    for (const sr of shadowRoots) observer.observe(sr, { childList: true, subtree: true });
   }
 
   function init() {
@@ -2118,23 +2160,9 @@
     injectDMStyles();
     attachActiveScopeTracking();
 
-    // Use waitForElement for initial injection (Auto Gmail pattern)
-    const msgFormSelector = [
-      '.msg-form__footer',
-      '.msg-form__contenteditable',
-      '.msg-overlay-conversation-bubble',
-      MSG_FORM_SELECTOR,
-    ].join(', ');
-
-    // Try waitForElement first (efficient — no polling)
-    waitForElement(msgFormSelector, { timeout: 10000 })
-      .then(() => {
-        setTimeout(injectAIReplyButton, 500);
-      })
-      .catch(() => {
-        // No chat open yet — the MutationObserver injects when one opens.
-        log('No chat composer yet; waiting for one to open');
-      });
+    // First pass right away (chats may already be open, including inside
+    // shadow roots), then a few retries while LinkedIn finishes loading.
+    setTimeout(injectAIReplyButton, 300);
 
     // Also always try at intervals (LinkedIn is slow to load)
     setTimeout(injectAIReplyButton, 2000);
@@ -2142,6 +2170,11 @@
     setTimeout(injectAIReplyButton, 8000);
 
     startObserving();
+
+    // Slow safety net: a shadow root can be attached to an element that is
+    // already on the page, which no MutationObserver reports. Cheap when
+    // every chat already has its button.
+    setInterval(injectAIReplyButton, 3000);
 
     // Watch URL changes (LinkedIn is an SPA)
     lastMsgUrl = location.href;
