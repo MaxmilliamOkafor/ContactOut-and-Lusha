@@ -19,8 +19,14 @@
   let aiPanel = null;
   let observer = null;
   let lastMsgUrl = '';
-  let injectionAttempts = 0;
-  const MAX_INJECTION_ATTEMPTS = 50;
+  // Profile chosen last in the panel; one-click drafting uses it too.
+  const DEFAULT_PROFILE_KEY = 'outreach_dm_default_profile';
+
+  // Set to true to trace scraping/injection in the page console.
+  const DEBUG = false;
+  function log(...args) {
+    if (DEBUG) console.log('[OutreachPro DM]', ...args);
+  }
 
   // Track the composer the user most recently interacted with, so that when
   // multiple chat bubbles are open we scrape and insert into the *current*
@@ -37,10 +43,12 @@
     'div[class*="messaging-thread"]',
   ];
 
+  // Message composers only — not the feed's post/comment boxes, which are
+  // also div[role="textbox"].
   const COMPOSER_SELECTOR =
     '.msg-form__contenteditable div[contenteditable="true"], ' +
     '.msg-form__contenteditable, ' +
-    'div[role="textbox"][contenteditable="true"], ' +
+    '.msg-form [contenteditable="true"], ' +
     'div[contenteditable="true"][class*="msg"]';
 
   function attachActiveScopeTracking() {
@@ -413,20 +421,67 @@
       tone: 'witty',
       examples: [
         { inbound: "",
-          response: "Hi [Name], came across your work in [field] and thought it was worth reaching out. I'm working on something that might actually be relevant, mind if I send a quick overview?" },
+          response: "Hi [Name], came across your work in [field] and thought it was worth reaching out. I'm working on something that might be relevant to you. Open to a quick chat?" },
       ]
     },
   ];
+
+  // Seed examples shipped by earlier versions. Installs that still hold them
+  // verbatim (i.e. the user never edited them) get the current seeds
+  // instead, so old "Great question! I'd love to walk you through..." text
+  // stops leaking into cold outreach. Edited examples are never touched.
+  const LEGACY_SEED_RESPONSES = {
+    "Great question! We help companies like yours streamline their recruitment pipeline by 3x. I'd love to walk you through a quick 15-min demo — would Thursday or Friday work better for you?": ['book_meeting', 0],
+    "Totally understand — I know how hectic things can get! How about we pencil in a brief 10-minute chat next week? I promise it'll be worth your time. What day works best?": ['book_meeting', 1],
+    "Likewise! I've been following your work at [Company] — really impressive stuff with the product launch last quarter. Would love to hear more about what you're working on next!": ['build_rapport', 0],
+    "Completely understand — it's a big decision! What I can share is that our clients typically see ROI within the first 30 days. Happy to connect you with a reference in your industry. Would that help with evaluating?": ['close_deal', 0],
+    "Hi [Name]! I came across your profile and was genuinely impressed by your work in [field]. I'm working on something that could be a perfect fit — mind if I share a quick overview?": ['cold_outreach', 0],
+    "Hi [Name], came across your work in [field] and thought it was worth reaching out. I'm working on something that might actually be relevant, mind if I send a quick overview?": ['cold_outreach', 0],
+  };
+
+  function migrateLegacySeeds(profiles) {
+    let changed = false;
+    for (const p of profiles) {
+      for (const ex of (p.examples || [])) {
+        const target = LEGACY_SEED_RESPONSES[ex.response];
+        if (!target) continue;
+        const seed = DEFAULT_PROFILES.find(d => d.id === target[0]);
+        const fresh = seed && seed.examples[target[1]];
+        if (fresh && fresh.response !== ex.response) {
+          ex.response = fresh.response;
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
 
   async function getProfiles() {
     return new Promise(resolve => {
       chrome.storage.local.get(TRAINING_KEY, r => {
         const profiles = r[TRAINING_KEY];
-        if (profiles && profiles.length > 0) return resolve(profiles);
+        if (profiles && profiles.length > 0) {
+          if (migrateLegacySeeds(profiles)) {
+            chrome.storage.local.set({ [TRAINING_KEY]: profiles });
+          }
+          return resolve(profiles);
+        }
         // First time — seed defaults
         chrome.storage.local.set({ [TRAINING_KEY]: DEFAULT_PROFILES }, () => resolve(DEFAULT_PROFILES));
       });
     });
+  }
+
+  // The profile one-click drafting uses: the one last picked in the panel,
+  // falling back to the first profile.
+  async function getActiveProfile() {
+    const profiles = await getProfiles();
+    const savedId = await new Promise(resolve => {
+      try {
+        chrome.storage.local.get(DEFAULT_PROFILE_KEY, r => resolve(r && r[DEFAULT_PROFILE_KEY]));
+      } catch (e) { resolve(null); }
+    });
+    return profiles.find(p => p.id === savedId) || profiles[0];
   }
 
   async function saveProfiles(profiles) {
@@ -439,53 +494,118 @@
   //  3. CONVERSATION SCRAPER (Robust v3)
   //  3 strategies to handle LinkedIn DOM changes
   // ═══════════════════════════════════════════
+  // Visible text of an element. innerText keeps paragraph breaks
+  // ("review:\nhttps://…"), where textContent glues paragraphs together.
+  // innerText is empty for hidden nodes, so fall back to textContent.
+  function readText(el) {
+    if (!el) return '';
+    let t = el.innerText;
+    if (!t || !t.trim()) t = el.textContent || '';
+    return t.replace(/ /g, ' ')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  // "Evan Farren (She/Her) • 1st" → "Evan Farren"
+  function cleanPersonName(raw) {
+    if (!raw) return '';
+    return String(raw).split('\n')[0]
+      .replace(/\(.*?\)/g, ' ')
+      .replace(/[•·|].*$/, ' ')
+      .replace(/\b(1st|2nd|3rd\+?)\b/gi, ' ')
+      .replace(/[^\p{L}\p{M}\s'.-]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function firstNameOf(full) {
+    const parts = cleanPersonName(full).split(' ').filter(Boolean);
+    while (parts.length > 1 && /^(dr|mr|mrs|ms|miss|prof|sir)\.?$/i.test(parts[0])) parts.shift();
+    return parts[0] || '';
+  }
+
+  // The signed-in user's name, from the global-nav avatar's alt text.
+  function getMyName() {
+    const img = document.querySelector(
+      'img.global-nav__me-photo, .global-nav__me img, img[class*="global-nav__me-photo"]'
+    );
+    return cleanPersonName(img ? (img.getAttribute('alt') || '') : '');
+  }
+
+  function sameName(a, b) {
+    const x = cleanPersonName(a).toLowerCase();
+    const y = cleanPersonName(b).toLowerCase();
+    if (!x || !y) return false;
+    return x === y || x.startsWith(y + ' ') || y.startsWith(x + ' ');
+  }
+
+  function looksLikeRealName(s) {
+    if (!s) return false;
+    const t = s.trim();
+    if (t.length < 2 || t.length > 60) return false;
+    if (/^(messaging|inbox|new message|active now|online|you|linkedin member)$/i.test(t)) return false;
+    return !/\d{3,}/.test(t);
+  }
+
+  // Containers to search for per-conversation details (header, headline):
+  // the scope, then a few ancestors — the header is often a sibling of the
+  // message list rather than inside it.
+  function scopeAncestors(root) {
+    const out = [];
+    let cur = root;
+    for (let i = 0; i < 4 && cur && cur !== document.body && cur !== document; i++) {
+      out.push(cur);
+      cur = cur.parentElement;
+    }
+    return out;
+  }
+
   function scrapeConversation(scope) {
-    let messages = [];
+    const messages = [];
     const root = (scope && document.contains(scope)) ? scope : document;
-    const rootLabel = root === document ? 'document' : (root.className || root.tagName);
+    const myName = getMyName();
+    // LinkedIn marks messages from the other person with --other on some
+    // layouts; used when the sender name can't be compared.
+    const hasOtherMarkers = !!root.querySelector('.msg-s-event-listitem--other');
 
-    // ─── Strategy 1: Specific LinkedIn message selectors ───
-    const msgSelectors = [
-      '.msg-s-event-listitem',
-      '.msg-s-message-list__event',
-      'li.msg-s-message-list__event',
-      'div[class*="msg-s-event-listitem"]',
-      'div[class*="msg-s-message-group"]',
-      '.msg-s-message-group__msg',
-    ];
-
-    let msgElements = [];
-    for (const sel of msgSelectors) {
-      msgElements = root.querySelectorAll(sel);
-      if (msgElements.length > 0) {
-        console.log('[OutreachPro DM] Scraper Strategy 1 hit:', sel, msgElements.length, 'msgs (scope:', rootLabel, ')');
-        break;
+    function whoIsIt(sender, itemEl) {
+      if (myName && sender) return sameName(sender, myName);
+      if (hasOtherMarkers && itemEl) {
+        return !(itemEl.className || '').toString().includes('--other');
       }
+      return null; // unknown
     }
 
-    msgElements.forEach(el => {
-      const textEl = el.querySelector(
-        '.msg-s-event-listitem__body, ' +
-        '.msg-s-event__content, ' +
-        '.msg-s-message-group__msg-body, ' +
-        'p, span[dir="ltr"]'
-      );
-      const senderEl = el.querySelector(
-        '.msg-s-message-group__name, ' +
-        '.msg-s-message-group__profile-link, ' +
-        'span[class*="sender"], ' +
-        'a[class*="profile"]'
-      );
-      if (textEl && textEl.textContent.trim().length > 0) {
-        messages.push({
-          text: textEl.textContent.trim(),
-          sender: senderEl ? senderEl.textContent.trim() : 'Unknown',
-          isMe: !!(el.classList?.toString().includes('outgoing') || el.querySelector('[class*="outgoing"]')),
-        });
-      }
+    // ─── Strategy 1: message groups. Only the first message of a group
+    // carries the sender's name, so carry it forward to the rest. ───
+    let currentSender = '';
+    root.querySelectorAll('li.msg-s-message-list__event').forEach(ev => {
+      const nameEl = ev.querySelector('.msg-s-message-group__name, .msg-s-message-group__profile-link');
+      if (nameEl) currentSender = cleanPersonName(readText(nameEl));
+      ev.querySelectorAll('.msg-s-event-listitem').forEach(item => {
+        const text = readText(item.querySelector('.msg-s-event-listitem__body, .msg-s-event__content'));
+        if (!text) return;
+        messages.push({ text, sender: currentSender || 'Unknown', isMe: whoIsIt(currentSender, item) });
+      });
     });
+    if (messages.length) log('Scraper: grouped events', messages.length);
 
-    // ─── Strategy 2: Find msg container, get all paragraphs ───
+    // ─── Strategy 1b: bare message items (layouts without list events) ───
+    if (messages.length === 0) {
+      root.querySelectorAll('.msg-s-event-listitem, div[class*="msg-s-event-listitem"]').forEach(item => {
+        const text = readText(item.querySelector(
+          '.msg-s-event-listitem__body, .msg-s-event__content, .msg-s-message-group__msg-body'
+        ));
+        if (!text) return;
+        const nameEl = item.querySelector('.msg-s-message-group__name, .msg-s-message-group__profile-link');
+        if (nameEl) currentSender = cleanPersonName(readText(nameEl));
+        messages.push({ text, sender: currentSender || 'Unknown', isMe: whoIsIt(currentSender, item) });
+      });
+      if (messages.length) log('Scraper: bare items', messages.length);
+    }
+
+    // ─── Strategy 2: message list container, paragraph by paragraph ───
     if (messages.length === 0) {
       const containerSelectors = [
         '.msg-s-message-list-content',
@@ -493,204 +613,133 @@
         'ul[class*="msg-s-message-list"]',
         'div[class*="msg-s-message-list"]',
         '.msg-overlay-conversation-bubble__content',
-        'div[class*="msg-overlay-conversation-bubble"]',
-        '.msg-thread',
-        'div[class*="msg-convo"]',
       ];
-
       let container = null;
       for (const sel of containerSelectors) {
-        // If we have a scope, search within it first. If the scope itself
-        // matches, use it directly.
-        if (root !== document && root.matches && root.matches(sel)) {
-          container = root;
-        } else {
-          container = root.querySelector(sel);
-        }
-        if (container) {
-          console.log('[OutreachPro DM] Scraper Strategy 2 hit:', sel);
-          break;
-        }
+        container = (root !== document && root.matches && root.matches(sel)) ? root : root.querySelector(sel);
+        if (container) break;
       }
-
       if (container) {
-        // Grab all paragraphs and text blocks inside the message container
-        const allP = container.querySelectorAll('p, span[dir="ltr"], div[class*="body"], div[class*="content"]');
-        allP.forEach(p => {
-          const text = p.textContent.trim();
-          // Filter out very short text, timestamps, "Sent", button labels etc.
-          if (text.length > 5 && !/^\d{1,2}:\d{2}/.test(text) && !['Sent', 'Delivered', 'Read', 'Typing...'].includes(text)) {
-            // Avoid duplicates from nested elements
-            if (!messages.some(m => m.text === text || m.text.includes(text) || text.includes(m.text))) {
-              messages.push({
-                text,
-                sender: 'Unknown',
-                isMe: false,
-              });
-            }
-          }
+        container.querySelectorAll('p, span[dir="ltr"]').forEach(p => {
+          const text = readText(p);
+          if (text.length <= 5 || /^\d{1,2}:\d{2}/.test(text)) return;
+          if (['Sent', 'Delivered', 'Read', 'Seen', 'Typing...'].includes(text)) return;
+          if (messages.some(m => m.text === text || m.text.includes(text) || text.includes(m.text))) return;
+          messages.push({ text, sender: 'Unknown', isMe: null });
         });
-        console.log('[OutreachPro DM] Strategy 2 found', messages.length, 'text blocks');
+        log('Scraper: container paragraphs', messages.length);
       }
     }
 
-    // ─── Strategy 3: Brute force — get ALL text from the conversation area ───
-    if (messages.length === 0) {
-      // Find any element that looks like a conversation container
-      const bruteSelector =
-        '[class*="msg-overlay-conversation-bubble"], ' +
-        '[class*="msg-thread"], ' +
-        '[class*="messaging-thread"], ' +
-        '[class*="msg-convo"]';
-      const bubble = (root !== document && root.matches && root.matches(bruteSelector))
-        ? root
-        : root.querySelector(bruteSelector);
-
-      if (bubble) {
-        console.log('[OutreachPro DM] Scraper Strategy 3 (brute force)');
-        // Get all text nodes that look like messages
-        const walker = document.createTreeWalker(
-          bubble,
-          NodeFilter.SHOW_TEXT,
-          {
-            acceptNode: (node) => {
-              const text = node.textContent.trim();
-              if (text.length < 8) return NodeFilter.FILTER_REJECT;
-              // Skip UI elements
-              const parent = node.parentElement;
-              if (!parent) return NodeFilter.FILTER_REJECT;
-              const tag = parent.tagName.toLowerCase();
-              if (['button', 'label', 'input', 'h1', 'h2', 'h3', 'h4'].includes(tag)) return NodeFilter.FILTER_REJECT;
-              const cls = parent.className?.toString() || '';
-              if (cls.includes('header') || cls.includes('title') || cls.includes('toolbar') || cls.includes('footer')) return NodeFilter.FILTER_REJECT;
-              return NodeFilter.FILTER_ACCEPT;
-            }
-          }
-        );
-
-        let node;
-        while (node = walker.nextNode()) {
-          const text = node.textContent.trim();
-          if (!messages.some(m => m.text === text)) {
-            messages.push({ text, sender: 'Unknown', isMe: false });
-          }
-        }
-        console.log('[OutreachPro DM] Strategy 3 found', messages.length, 'text nodes');
+    // ─── Partner name ───
+    // 1. The most recent sender in this conversation who isn't me — taken
+    //    from the messages themselves, so it can't be another chat's name.
+    let partnerName = '';
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.isMe === false && looksLikeRealName(m.sender) && m.sender !== 'Unknown') {
+        partnerName = m.sender;
+        break;
       }
     }
 
-    // ─── Get conversation partner name ───
-    // IMPORTANT: the header/title element isn't always inside the scope
-    // we picked (e.g. scope may be .msg-thread but the header is a sibling
-    // in .msg-convo-wrapper). So we search the scope, then climb its
-    // ancestors, and only fall back to document-wide as a last resort —
-    // because a document-wide query will happily grab the first sidebar
-    // contact's name (Jitendra at the top of the inbox list) and put it in
-    // the greeting for every conversation.
-    let partnerName = 'there';
-    const nameSelectors = [
-      // Overlay bubble header (pop-out chats)
+    // 2. This conversation's own header. Searched within the scope and a few
+    //    ancestors only — never document-wide, which would pick up names
+    //    from the inbox sidebar or other chat bubbles.
+    const headerSelectors = [
       '.msg-overlay-bubble-header__title',
       'h2[class*="msg-overlay-bubble-header"]',
-      '.msg-overlay-bubble-header__badge-container + *',
       '[class*="msg-overlay-bubble-header"] a',
-      '[class*="msg-overlay-bubble-header"] span[class*="title"]',
-      // Full messaging page thread header
       '.msg-thread__link-to-profile',
       '[class*="msg-thread__link-to-profile"]',
       '.msg-thread__title-text',
-      'h2[class*="conversation-title"]',
       '.msg-entity-lockup__entity-title',
       '[class*="msg-entity-lockup__entity-title"]',
       '[data-test-conversation-participant-names]',
-      '.msg-conversation-card__participant-names',
-      // Generic: any <h2> inside the scope / its ancestors
-      'header h2',
-      'h2',
     ];
-
-    // Build the list of containers to search, in priority order: the scope
-    // itself, then each ancestor up to <body>.
-    const searchRoots = [];
-    if (root !== document) {
-      let cur = root;
-      for (let i = 0; i < 6 && cur && cur !== document.body; i++) {
-        searchRoots.push(cur);
-        cur = cur.parentElement;
-      }
-    }
-
-    function looksLikeRealName(s) {
-      if (!s) return false;
-      const t = s.trim();
-      if (t.length < 2 || t.length > 80) return false;
-      // Reject obviously non-name strings
-      if (/^(messaging|inbox|new message|active now|online|you)$/i.test(t)) return false;
-      if (/\d{3,}/.test(t)) return false;
-      return true;
-    }
-
-    outer:
-    for (const container of searchRoots) {
-      for (const sel of nameSelectors) {
-        const els = container.querySelectorAll(sel);
-        for (const el of els) {
-          const txt = el.textContent.replace(/\s+/g, ' ').trim();
-          if (looksLikeRealName(txt)) {
-            partnerName = txt;
-            console.log('[OutreachPro DM] Partner name found (scoped):', partnerName, 'via', sel);
-            break outer;
+    const containers = root !== document ? scopeAncestors(root) : [];
+    if (!partnerName) {
+      outer:
+      for (const container of containers) {
+        for (const sel of headerSelectors) {
+          for (const el of container.querySelectorAll(sel)) {
+            const name = cleanPersonName(readText(el));
+            if (looksLikeRealName(name) && !(myName && sameName(name, myName))) {
+              partnerName = name;
+              break outer;
+            }
           }
         }
       }
     }
 
-    // Last-resort document-wide fallback only if scope search found nothing.
-    // Prefer the visible (non-minimized) overlay bubble header to avoid
-    // grabbing the first sidebar contact name.
-    if (partnerName === 'there') {
-      const visibleBubble = [...document.querySelectorAll(
-        '.msg-overlay-conversation-bubble, div[class*="msg-overlay-conversation-bubble"]'
-      )].find(b => {
-        const cls = b.className ? b.className.toString() : '';
-        if (cls.includes('--is-minimized') || cls.includes('is-collapsed')) return false;
-        const r = b.getBoundingClientRect();
-        return r.width > 0 && r.height > 80;
-      });
-      const fallbackRoot = visibleBubble || document;
-      for (const sel of nameSelectors) {
-        const el = fallbackRoot.querySelector(sel);
-        if (el && looksLikeRealName(el.textContent.trim())) {
-          partnerName = el.textContent.replace(/\s+/g, ' ').trim();
-          console.log('[OutreachPro DM] Partner name found (fallback):', partnerName, 'via', sel);
-          break;
+    // ─── Partner's company, from their headline ("… at Optum", "… @ AWS") ───
+    let partnerCompany = '';
+    const headlineSelectors = [
+      '.msg-entity-lockup__entity-info',
+      '.msg-thread__subtitle',
+      '.msg-overlay-bubble-header__subtitle',
+      '.msg-s-profile-card .artdeco-entity-lockup__subtitle',
+    ];
+    outerCo:
+    for (const container of containers) {
+      for (const sel of headlineSelectors) {
+        const el = container.querySelector(sel);
+        const m = el && readText(el).split('\n')[0].match(/(?:\s(?:at)\s|\s?@\s?)([^|,•·\n]{2,40})/i);
+        if (m) {
+          partnerCompany = m[1].trim().replace(/[.\s]+$/, '');
+          break outerCo;
         }
       }
     }
 
-    console.log('[OutreachPro DM] Scraped conversation:', messages.length, 'messages, partner:', partnerName);
-
-    // Pick the most recent *substantive* message as lastMessage. Greetings
-    // and pleasantries like "Hello Max, thanks for reaching out!" shouldn't
-    // dictate the reply — we want the real thing the partner said. If the
-    // very last message happens to be a greeting (common opener), walk
-    // backwards to find the real content.
+    // ─── Whose turn is it? ───
+    const senderKnown = messages.some(m => m.isMe !== null);
     let lastMessage = null;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (!m || !m.text) continue;
-      if (isTrivialMessage(m.text) && lastMessage) continue; // skip trivial if we already have something better
-      lastMessage = m;
-      if (!isTrivialMessage(m.text)) break; // found substantive — stop
+    let lastFromMe = false;
+    let myOpener = '';
+
+    if (senderKnown) {
+      const mine = messages.filter(m => m.isMe === true);
+      myOpener = mine.length ? mine[0].text : '';
+      lastFromMe = messages.length > 0 && messages[messages.length - 1].isMe === true;
+
+      // The partner's latest "turn": their consecutive messages, most
+      // recent run. People often split one thought over several messages
+      // ("Hello!" / "How can I help?"), so read them together.
+      let end = messages.length - 1;
+      while (end >= 0 && messages[end].isMe !== false) end--;
+      if (end >= 0) {
+        let start = end;
+        while (start > 0 && messages[start - 1].isMe === false) start--;
+        const run = messages.slice(start, end + 1);
+        lastMessage = {
+          text: run.map(m => m.text).join('\n'),
+          sender: run[run.length - 1].sender,
+          isMe: false,
+        };
+      }
+    } else {
+      // Sender unknown: use the most recent message that says something —
+      // skipping trailing pleasantries like "Thanks!" when there's more.
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (isTrivialMessage(m.text) && lastMessage) continue;
+        lastMessage = m;
+        if (!isTrivialMessage(m.text)) break;
+      }
     }
-    if (!lastMessage && messages.length > 0) {
-      lastMessage = messages[messages.length - 1];
-    }
+
+    log('Scraped:', messages.length, 'messages; partner:', partnerName || '(unknown)',
+      '; last from me:', lastFromMe);
 
     return {
       messages: messages.slice(-10),
       lastMessage,
-      partnerName,
+      partnerName: partnerName || 'there',
+      partnerCompany,
+      lastFromMe,
+      myOpener,
     };
   }
 
@@ -699,13 +748,12 @@
     if (!text) return true;
     const t = text.trim().toLowerCase();
     if (t.length < 12) return true;
-    // Pure greetings / opening pleasantries
     if (/^(hi|hello|hey|hiya|greetings|good (morning|afternoon|evening))\b[\s\S]{0,40}$/i.test(t)) return true;
     if (/^thanks? (for )?(reaching|connecting|the message|your message|getting in touch)/i.test(t)) return true;
     if (/^thank you (for )?(reaching|connecting|the message|your message|getting in touch|your time)/i.test(t)) return true;
     if (/^(nice|great|good|pleasure) to (meet|connect|hear)/i.test(t)) return true;
-    // Emoji-only or sticker-like replies
-    if (/^[\p{Emoji}\s!?.]+$/u.test(t) && t.length < 30) return true;
+    // Emoji / thumbs-up style replies
+    if (/^[\p{Extended_Pictographic}\s!?.]+$/u.test(t) && t.length < 30) return true;
     return false;
   }
 
@@ -717,7 +765,7 @@
   function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
   function generateResponse(profile, conversation) {
-    const partnerName = (conversation.partnerName || 'there').split(' ')[0];
+    const partnerName = firstNameOf(conversation.partnerName) || 'there';
     const tone = profile ? profile.tone : 'professional';
     const goal = profile ? profile.description : 'Continue the conversation naturally';
     const lastMsg = conversation.lastMessage;
@@ -725,6 +773,14 @@
 
     // ─── Analyze the conversation context ───
     const context = analyzeConversation(allMessages, lastMsg);
+    context.partnerCompany = conversation.partnerCompany || '';
+    context.myOpener = conversation.myOpener || '';
+    // I sent the last message and they haven't replied: write a follow-up,
+    // not a reply to their older message.
+    if (conversation.lastFromMe) {
+      context.lastIntent = 'awaiting';
+      context.isFirstMessage = false;
+    }
 
     // ─── Build a reply based on what was actually said ───
     let reply = buildContextualReply(context, partnerName, tone, goal, profile);
@@ -895,7 +951,8 @@
       collaboration: ['collaborate', 'partner', 'together', 'joint', 'co-', 'synergy'],
       gratitude: ['thanks', 'thank you', 'appreciate', 'grateful'],
       interest: ['interested', 'curious', 'tell me more', 'love to know', 'sounds good', 'sounds great', 'sounds interesting', 'sound interesting', 'keen to', 'would love'],
-      rejection: ['not interested', 'no thanks', 'pass', 'busy', 'not right now', 'not a good time'],
+      rejection: ['not interested', 'no thanks', 'no thank you', 'not a good fit', 'not the right time', 'not right now',
+        'not a good time', 'too busy', 'busy right now', 'busy at the moment', 'pass on this', "we're all set", 'not looking'],
       introduction: ['nice to meet', 'pleasure', 'connect', 'connecting', 'connected', 'connection', 'reaching out', 'great to connect', 'good to connect'],
       pricing: ['price', 'cost', 'pricing', 'budget', 'how much', 'investment', 'plan'],
       experience: ['experience', 'background', 'worked at', 'years', 'expertise'],
@@ -925,8 +982,19 @@
     const substantiveTopics = ['job', 'meeting', 'product', 'collaboration', 'pricing', 'experience'];
     const hasSubstantive = ctx.topics.some(t => substantiveTopics.includes(t));
 
-    if (ctx.questions.length > 0) ctx.lastIntent = 'question';
+    // Did they propose a time? ("I'm free Tuesday at 11am…")
+    ctx.proposedSlot = extractProposedSlot(lastMsg.text);
+    // Are they offering to help? ("How can I assist you?")
+    ctx.offersHelp = /\bhow (?:can|may|could) i (?:help|assist|be of (?:help|assistance))\b|\bwhat can i do for you\b|\blet me know how i (?:can|could) help\b/i.test(lastMsg.text);
+    const platform = lastMsg.text.match(/\b(Microsoft Teams|Teams|Zoom|Google Meet)\b/i);
+    ctx.meetingPlatform = platform ? platform[1].replace(/^microsoft /i, '').replace(/^(\w)/, c => c.toUpperCase()) : '';
+    ctx.partnerSendsLink = /\bi(?:'ll| will| can)\s+(?:share|send)\b[^.!?]{0,40}\b(?:link|invite|invitation)\b/i.test(lastMsg.text);
+    ctx.sharedDetails = /https?:\/\/|\bjob description\b|\battached\b|\bsharing\b/i.test(lastMsg.text);
+
+    if (ctx.proposedSlot) ctx.lastIntent = 'scheduling';
     else if (ctx.topics.includes('rejection')) ctx.lastIntent = 'objection';
+    else if (ctx.offersHelp) ctx.lastIntent = 'offer';
+    else if (ctx.questions.length > 0) ctx.lastIntent = 'question';
     else if (ctx.topics.includes('followup')) ctx.lastIntent = 'followup';
     else if (ctx.topics.includes('interest')) ctx.lastIntent = 'positive';
     else if (hasSubstantive) ctx.lastIntent = 'statement'; // routed to buildGeneralReply, which picks the topic
@@ -954,21 +1022,30 @@
   function buildContextualReply(ctx, name, tone, goal, profile) {
     const greetings = {
       professional: [`Hi ${name},`, `Hello ${name},`],
-      casual: [`Hey ${name}!`, `Hi ${name}!`],
-      enthusiastic: [`Hey ${name}! 😊`, `Hi there ${name}!`],
-      witty: [`Hey ${name}!`, `Hi ${name},`],
+      casual: [`Hey ${name},`, `Hi ${name},`],
+      enthusiastic: [`Hi ${name},`, `Hey ${name},`],
+      witty: [`Hey ${name},`, `Hi ${name},`],
     };
     const greeting = pick(greetings[tone] || greetings.professional);
 
     // If no conversation yet (cold outreach)
     if (ctx.isFirstMessage) {
-      return buildColdOutreach(name, tone, goal, profile);
+      return buildColdOutreach(name, tone, goal, profile, ctx);
     }
 
     // Build reply based on detected intent
     let body = '';
 
     switch (ctx.lastIntent) {
+      case 'awaiting':
+        body = buildNudgeReply(ctx, tone);
+        break;
+      case 'scheduling':
+        body = buildSchedulingReply(ctx, tone);
+        break;
+      case 'offer':
+        body = buildOfferReply(ctx, tone);
+        break;
       case 'question':
         body = buildQuestionReply(ctx, tone, goal);
         break;
@@ -999,7 +1076,118 @@
     return greeting + '\n\n' + body;
   }
 
-  function buildColdOutreach(name, tone, goal, profile) {
+  // Find a time the partner proposed: "Tuesday at 11am", "Wednesday before
+  // 12pm", "are you free Thursday?". Needs scheduling context nearby so a
+  // passing mention ("I was at a conference on Tuesday") doesn't count.
+  function extractProposedSlot(text) {
+    if (!text) return null;
+    const schedulingContext = /\b(availab\w*|free|works?|suit\w*|slot|call|meet\w*|chat|interview|catch up|calendar|schedul\w*|teams|zoom)\b/i;
+    if (!schedulingContext.test(text)) return null;
+
+    const DAY_WORDS = 'monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow';
+    const DAY = '(' + DAY_WORDS + ')';
+    const TIME = '(\\d{1,2}(?::\\d{2})?\\s?(?:am|pm)|noon|midday)';
+    // The words between a day and its time may not contain another day:
+    // "busy Tuesday but Wednesday at 2pm" must give Wednesday, not Tuesday.
+    const GAP = '(?:(?!\\b(?:' + DAY_WORDS + ')\\b)[^.!?\\n]){0,25}?';
+    const withTime = new RegExp('\\b' + DAY + '\\b' + GAP + '\\b(at|before|after|from|around)?\\s*' + TIME, 'gi');
+    const cap = s => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+    // "I'm busy Tuesday", "can't do Thursday", "not free on Monday"
+    const ruledOut = idx => /\b(not|busy|unavailable|can't|cannot|can not|except|out of office|ooo)\b[^.!?\n]{0,12}$/i
+      .test(text.slice(Math.max(0, idx - 30), idx));
+
+    // Prefer an exact "at <time>" slot over a "before/after" window.
+    let best = null;
+    let m;
+    while ((m = withTime.exec(text))) {
+      if (ruledOut(m.index)) continue;
+      const prep = (m[2] || 'at').toLowerCase();
+      const time = m[3].replace(/\s+/g, '').toLowerCase();
+      const slot = { text: `${cap(m[1])} ${prep} ${time}`, hasTime: true, window: prep === 'before' || prep === 'after' };
+      if (!slot.window) return slot;
+      if (!best) best = slot;
+    }
+    if (best) return best;
+
+    // A day on its own, when they're clearly asking about availability.
+    const dayOnly = text.match(new RegExp('\\b(?:free|available|work for you|suit you)\\b[^.!?\\n]{0,20}\\b' + DAY + '\\b', 'i'))
+      || text.match(new RegExp('\\b' + DAY + '\\b[^.!?\\n]{0,20}\\b(?:work|suit)s? (?:for )?you\\b', 'i'));
+    if (dayOnly && !ruledOut(dayOnly.index + dayOnly[0].toLowerCase().lastIndexOf(dayOnly[1].toLowerCase()))
+        && !/\b(not|n't)\b/i.test(dayOnly[0])) {
+      return { text: cap(dayOnly[1]), hasTime: false, window: false };
+    }
+    return null;
+  }
+
+  // They proposed a time → accept it (the draft is always reviewed before
+  // sending, so the user can swap the slot if it doesn't suit).
+  function buildSchedulingReply(ctx, tone) {
+    const slot = ctx.proposedSlot;
+    const parts = [];
+
+    if (ctx.sharedDetails) {
+      parts.push(ctx.topics.includes('job') ? 'Thanks for sending the job description over.' : 'Thanks for sending that over.');
+    }
+
+    if (!slot.hasTime) {
+      parts.push(`${slot.text} works for me. What time suits you?`);
+      return parts.join(' ');
+    }
+    parts.push(slot.window
+      ? `${slot.text} works for me, happy to fit in wherever suits you in that window.`
+      : `${slot.text} works well for me.`);
+
+    let closer;
+    if (ctx.partnerSendsLink) {
+      closer = ctx.meetingPlatform
+        ? `Looking forward to it, I'll keep an eye out for the ${ctx.meetingPlatform} invite.`
+        : `Looking forward to it, I'll keep an eye out for the invite.`;
+    } else if (ctx.meetingPlatform) {
+      closer = `Feel free to send the ${ctx.meetingPlatform} link whenever suits.`;
+    } else {
+      closer = tone === 'casual' ? 'Speak then.' : 'Looking forward to speaking then.';
+    }
+    return parts.join(' ') + '\n\n' + closer;
+  }
+
+  // Why did I reach out in the first place? Read from my opening message,
+  // so "how can I help?" gets a real answer instead of a dodge.
+  function outreachPurpose(myOpener) {
+    const o = (myOpener || '').toLowerCase();
+    if (/collaborat|partner(ship)?\b|work together/.test(o)) return 'whether there might be a way for us to collaborate';
+    if (/\b(role|position|job|opening|opportunit\w*|hiring|vacanc\w*)\b/.test(o)) return 'whether there might be a fit for me on your team';
+    if (/\b(advice|insight|perspective|learn|mentor\w*)\b/.test(o)) return "get your perspective on a couple of things I'm working on";
+    return "whether there's a way we could help each other";
+  }
+
+  function buildOfferReply(ctx, tone) {
+    const purpose = outreachPurpose(ctx.myOpener);
+    const where = ctx.partnerCompany ? ` at ${ctx.partnerCompany}` : '';
+    const replies = {
+      professional: `Thanks, appreciate that. I'd like to hear a bit more about what you're working on${where} and see ${purpose}.\n\nWould you be open to a quick 15-minute call this week?`,
+      casual: `Thanks, appreciate it. Mostly keen to hear what you're working on${where} and see ${purpose}. Up for a quick call this week?`,
+      enthusiastic: `Thanks, really appreciate that. I'd like to hear more about what you're working on${where} and see ${purpose}.\n\nWould a quick 15-minute call this week work?`,
+      witty: `Appreciate the offer. Short version: I'd like to hear what you're working on${where} and see ${purpose}. Got 15 minutes this week?`,
+    };
+    return replies[tone] || replies.professional;
+  }
+
+  // I sent the last message and haven't heard back.
+  function buildNudgeReply(ctx, tone) {
+    const replies = {
+      professional: [
+        'Just following up on my note above in case it got buried. Would be good to connect if you have a moment this week.',
+        'Bumping this up in case it slipped through. No pressure either way, happy to connect whenever suits.',
+      ],
+      casual: ['Just bumping this in case it got buried. No pressure either way.'],
+      enthusiastic: ['Just following up on my note above in case it got buried. Would be good to connect when you have a moment.'],
+      witty: ['Bumping this up before it sinks below the recruiter spam. No pressure either way.'],
+    };
+    return pick(replies[tone] || replies.professional);
+  }
+
+  function buildColdOutreach(name, tone, goal, profile, ctx) {
+    const company = (ctx && ctx.partnerCompany) || '';
     const greeting = pick({
       professional: [`Hi ${name},`, `Hello ${name},`],
       casual: [`Hey ${name},`, `Hi ${name},`],
@@ -1011,15 +1199,28 @@
     if (profile && profile.examples && profile.examples.length > 0) {
       const coldExamples = profile.examples.filter(e => !e.inbound || e.inbound.trim() === '');
       if (coldExamples.length > 0) {
-        let response = pick(coldExamples).response;
-        response = response.replace(/\[Name\]/gi, name).replace(/\[Company\]/gi, 'your company').replace(/\[field\]/gi, 'your field');
+        let response = pick(coldExamples).response
+          // The example usually opens with its own "Hi [Name]," — we
+          // already add a greeting, so drop it to avoid "Hi Priya, Hi Priya!".
+          .replace(/^\s*(?:hi|hey|hello)\b[^,!.\n]{0,30}[,!.]?\s*/i, '');
+        // Fill placeholders we know; drop the ones we don't instead of
+        // writing "your work in your field".
+        response = response
+          .replace(/\[Name\]/gi, name)
+          .replace(/\[Company\]/gi, company || '\u0000')
+          .replace(/\s+(?:in|at|with)\s+(?:\[field\]|\u0000)/gi, '')
+          .replace(/\u0000/g, 'your company')
+          .replace(/\[field\]/gi, 'your field');
+        response = response.charAt(0).toUpperCase() + response.slice(1);
         return greeting + '\n\n' + applyToneVariations(response, tone);
       }
     }
 
     const templates = {
       professional: [
-        `Saw your background — would you be open to a short call this week or next?`,
+        company
+          ? `Saw what you're doing at ${company} and thought it was worth reaching out. Would you be open to a short call this week or next?`
+          : `Saw your background — would you be open to a short call this week or next?`,
         `Your profile looked like there might be useful overlap with what I'm working on. Open to a quick chat?`,
       ],
       casual: [
@@ -1041,6 +1242,27 @@
     // detailed question → acknowledge, give a bit of context, then propose
     // a call. No "Great question!", no "it varies case-by-case" hedge, no
     // quoting the question back at them.
+    const t = ctx.topics || [];
+    const casual = tone === 'casual' || tone === 'witty';
+    // "When are you free?" → answer it.
+    if (t.includes('meeting')) {
+      return casual
+        ? `Sure. I'm pretty flexible this week, send over a time that suits and I'll make it work.`
+        : `Happy to. I'm fairly flexible this week, so just let me know a time that suits and I'll make it work.`;
+    }
+    // "How much is it?" → the pricing reply, sized to the question.
+    if (t.includes('pricing')) {
+      return ctx.matchLength === 's'
+        ? `Happy to go through numbers. It depends a little on your setup, so a quick call is easiest. What works this week?`
+        : `Happy to go through numbers properly. Pricing depends on a couple of things specific to your setup, so a generic figure here wouldn't be much use. A short call and I can give you something realistic. What works this week?`;
+    }
+    // "Are you open to new roles?" → yes, tell me more.
+    if (t.includes('job')) {
+      return casual
+        ? `Open to hearing more. What's the role, and what's the team working on right now?`
+        : `I'm open to hearing more. Could you share a bit about the role and what the team is working on at the moment?`;
+    }
+
     const replies = {
       professional: {
         s: [
@@ -1340,13 +1562,20 @@
   //  5. UI — AI REPLY BUTTON INJECTION
   //  Multi-strategy with Auto Gmail-style waitForElement
   // ═══════════════════════════════════════════
+  // A chat composer is LinkedIn's messaging form. Generic contenteditable
+  // textboxes are deliberately NOT treated as composers: the feed's post and
+  // comment boxes are also div[role="textbox"], and an "AI Reply" button
+  // there would make no sense.
+  const MSG_FORM_SELECTOR = 'form.msg-form, div.msg-form';
+
   function createAIButton() {
     const btn = document.createElement('button');
+    btn.type = 'button'; // never submit the surrounding LinkedIn form
     btn.className = AI_BTN_CLASS;
     btn.innerHTML = '<span style="animation:dm-ai-sparkle 2s ease-in-out infinite;display:inline-flex">✨</span><span>AI Reply</span>';
-    btn.title = 'Click: draft AI reply in message box | Right-click: open settings';
+    btn.title = 'Click: draft a reply to this conversation | Right-click: choose outcome / training';
 
-    // Single click → draft directly into the message box
+    // Single click → draft directly into this chat's message box
     btn.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -1357,175 +1586,119 @@
     btn.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      toggleAIPanel();
+      toggleAIPanel(btn);
     });
 
     return btn;
   }
 
-  // One-click: generate reply and insert directly into the message box
+  // The composer belonging to the same chat as `btn`. Each chat gets its own
+  // button, so this is exact; the floating fallback button uses the composer
+  // the user last typed in.
+  function composerFor(btn) {
+    const form = btn && btn.closest ? btn.closest(MSG_FORM_SELECTOR) : null;
+    const inForm = form && form.querySelector('[contenteditable="true"]');
+    if (inForm) return inForm;
+    if (lastActiveComposer && document.contains(lastActiveComposer)) return lastActiveComposer;
+    return null;
+  }
+
+  // Conversation scope + composer for an action started from `btn`.
+  function resolveTarget(btn) {
+    const composer = composerFor(btn);
+    const scope = closestScope(btn) || closestScope(composer) || findActiveScope(null);
+    return { scope, composer };
+  }
+
+  // One-click: generate a reply and insert it into this chat's message box
   async function directDraftReply(btn) {
-    // Show loading state on button
+    if (btn.dataset.busy === '1') return;
+    btn.dataset.busy = '1';
     const originalHTML = btn.innerHTML;
     btn.innerHTML = '<span style="display:inline-flex;animation:dm-ai-sparkle 0.5s ease-in-out infinite">⏳</span><span>Drafting...</span>';
     btn.disabled = true;
     btn.style.opacity = '0.7';
 
     try {
-      const profiles = await getProfiles();
-      const profile = profiles[0]; // Use first profile as default
-      // Scope to the conversation this button belongs to (or the last-
-      // focused one, for the floating button). This prevents scraping /
-      // inserting into a different person's chat when multiple are open.
-      const scope = findActiveScope(btn);
+      const profile = await getActiveProfile();
+      const { scope, composer } = resolveTarget(btn);
       const conversation = scrapeConversation(scope);
       const reply = generateResponse(profile, conversation);
-
-      // Insert directly into the LinkedIn message box
-      insertIntoMessageBox(reply, scope);
+      insertIntoMessageBox(reply, scope, composer);
     } catch (err) {
       console.error('[OutreachPro DM] Draft error:', err);
       showDMToast('Could not generate reply. Try again.', 'error');
     } finally {
-      // Restore button
       btn.innerHTML = originalHTML;
       btn.disabled = false;
       btn.style.opacity = '1';
+      delete btn.dataset.busy;
     }
   }
 
-  async function injectAIReplyButton() {
-    // Always allow injection — floating button works on any LinkedIn page
-    if (document.querySelector('.' + AI_BTN_CLASS)) return;
-
-    injectionAttempts++;
-    console.log(`[OutreachPro DM] Injection attempt ${injectionAttempts}...`);
-
-    const btn = createAIButton();
-
-    // ─── Strategy 1: LinkedIn msg-form footer (most reliable) ───
-    const footerSelectors = [
-      '.msg-form__footer',
-      '.msg-form__left-actions',
-      'div[class*="msg-form__footer"]',
-      'div[class*="msg-form__left"]',
-    ];
-
-    for (const sel of footerSelectors) {
-      const footer = document.querySelector(sel);
-      if (footer) {
-        footer.prepend(btn);
-        console.log('[OutreachPro DM] ✅ Injected into footer:', sel);
-        return;
-      }
-    }
-
-    // ─── Strategy 2: Next to Send button ───
-    const sendSelectors = [
-      'button.msg-form__send-button',
-      'button[type="submit"][class*="msg-form"]',
-      'button.msg-form__send-btn',
-    ];
-    for (const sel of sendSelectors) {
-      const sendBtn = document.querySelector(sel);
-      if (sendBtn && sendBtn.parentElement) {
-        sendBtn.parentElement.prepend(btn);
-        console.log('[OutreachPro DM] ✅ Injected near Send button:', sel);
-        return;
-      }
-    }
-
-    // ─── Strategy 3: Any "Send" text button in msg context ───
-    const allButtons = document.querySelectorAll('button');
-    for (const b of allButtons) {
-      const txt = b.textContent.trim().toLowerCase();
-      if ((txt === 'send' || txt === 'send message') && b.closest('[class*="msg"]')) {
-        b.parentElement.insertBefore(btn, b);
-        console.log('[OutreachPro DM] ✅ Injected near "Send" text button');
-        return;
-      }
-    }
-
-    // ─── Strategy 4: Near contenteditable message input ───
-    const inputSelectors = [
-      'div[role="textbox"][contenteditable="true"]',
-      '.msg-form__contenteditable',
-      'div[contenteditable="true"][class*="msg"]',
-      'div[data-placeholder*="Write a message"]',
-      'div[aria-label*="Write a message"]',
-    ];
-    for (const sel of inputSelectors) {
-      const msgInput = document.querySelector(sel);
-      if (msgInput) {
-        let container = msgInput.parentElement;
-        for (let i = 0; i < 6 && container; i++) {
-          if (container.querySelector('button') || container.classList.toString().includes('msg-form')) {
-            container.prepend(btn);
-            console.log('[OutreachPro DM] ✅ Injected near message input:', sel);
-            return;
-          }
-          container = container.parentElement;
-        }
-      }
-    }
-
-    // ─── Strategy 5: msg-overlay or msg-thread context ───
-    const overlaySelectors = [
-      '.msg-overlay-conversation-bubble',
-      '.msg-convo-wrapper',
-      '.msg-thread',
-      'div[class*="msg-overlay-conversation"]',
-      'div[class*="msg-s-message-list"]',
-    ];
-    for (const sel of overlaySelectors) {
-      const overlay = document.querySelector(sel);
-      if (overlay) {
-        // Find any form or footer area within
-        const inner = overlay.querySelector('footer, [class*="footer"], [class*="action"], form');
-        if (inner) {
-          inner.prepend(btn);
-          console.log('[OutreachPro DM] ✅ Injected into overlay inner:', sel);
-          return;
-        }
-      }
-    }
-
-    // ─── Strategy 6: Floating button — ALWAYS on LinkedIn ───
-    btn.classList.add('floating');
-    document.body.appendChild(btn);
-    console.log('[OutreachPro DM] ✅ Injected as floating button (fallback)');
-    return;
+  function findMsgForms() {
+    return [...document.querySelectorAll(MSG_FORM_SELECTOR)]
+      .filter(f => f.querySelector('[contenteditable="true"]'));
   }
 
-  function isOnMessagingPage() {
-    return location.pathname.includes('/messaging') ||
-           !!document.querySelector(
-             '.msg-overlay-conversation-bubble, ' +
-             '.msg-form__contenteditable, ' +
-             '.msg-thread, ' +
-             'div[class*="msg-form"], ' +
-             'div[class*="msg-overlay-conversation"], ' +
-             'div[role="textbox"][contenteditable="true"]'
-           );
+  // Give every open chat composer its own AI Reply button. With several
+  // chat bubbles open, each button drafts for its own conversation.
+  function injectAIReplyButton() {
+    const forms = findMsgForms();
+    let added = 0;
+
+    for (const form of forms) {
+      if (form.querySelector('.' + AI_BTN_CLASS)) continue;
+      const sendBtn = form.querySelector('.msg-form__send-button, button[type="submit"]');
+      const anchor =
+        form.querySelector('.msg-form__footer') ||
+        form.querySelector('.msg-form__left-actions') ||
+        form.querySelector('div[class*="msg-form__footer"]') ||
+        (sendBtn && sendBtn.parentElement);
+      if (!anchor) continue;
+      anchor.prepend(createAIButton());
+      added++;
+    }
+    if (added) log('Injected AI Reply into', added, 'composer(s)');
+
+    // Floating fallback: only when a chat composer exists that we could not
+    // anchor into (e.g. LinkedIn changed its markup). Never on pages with no
+    // chat open.
+    const anchored = forms.some(f => f.querySelector('.' + AI_BTN_CLASS + ':not(.floating)'));
+    const floating = document.querySelector('.' + AI_BTN_CLASS + '.floating');
+    const looseComposer = document.querySelector(
+      '.msg-form__contenteditable, [class*="msg-form"] [contenteditable="true"]'
+    );
+    if (anchored || !looseComposer) {
+      if (floating) floating.remove();
+      return;
+    }
+    if (!floating) {
+      const b = createAIButton();
+      b.classList.add('floating');
+      document.body.appendChild(b);
+      log('Injected floating AI Reply (composer without a known footer)');
+    }
   }
 
   // ═══════════════════════════════════════════
   //  6. UI — AI RESPONSE PANEL
   // ═══════════════════════════════════════════
-  function toggleAIPanel() {
+  function toggleAIPanel(originBtn) {
     if (aiPanel) {
       aiPanel.remove();
       aiPanel = null;
       return;
     }
-    buildAIPanel();
+    buildAIPanel(originBtn);
   }
 
-  async function buildAIPanel() {
+  async function buildAIPanel(originBtn) {
     const profiles = await getProfiles();
-    // Lock the panel to the conversation active when it was opened.
-    const panelScope = findActiveScope(null);
-    const conversation = scrapeConversation(panelScope);
+    const activeProfile = await getActiveProfile();
+    // The panel belongs to the chat whose AI Reply button opened it.
+    const target = () => resolveTarget(originBtn);
+    const conversation = scrapeConversation(target().scope);
 
     const panel = document.createElement('div');
     panel.id = PANEL_ID;
@@ -1555,7 +1728,7 @@
           <div style="margin-bottom:10px">
             <label style="font-size:10px;font-weight:700;color:#6366F1;text-transform:uppercase;display:block;margin-bottom:4px">Desired Outcome</label>
             <select class="dm-ai-outcome-select" id="dm-ai-outcome">
-              ${profiles.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
+              ${profiles.map(p => `<option value="${esc(p.id)}"${activeProfile && p.id === activeProfile.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
             </select>
           </div>
           <div id="dm-ai-skel" style="display:none">
@@ -1611,10 +1784,11 @@
       copyBtn.style.display = 'none';
       insertBtn.style.display = 'none';
 
-      // Re-resolve scope at click time so the panel follows the user if
-      // they switched bubbles after opening it.
-      const liveScope = findActiveScope(null) || panelScope;
-      const freshConv = scrapeConversation(liveScope);
+      // Remember this choice for one-click drafting too.
+      try { chrome.storage.local.set({ [DEFAULT_PROFILE_KEY]: profile.id }); } catch (e) { /* ignore */ }
+
+      // Re-scrape at click time: new messages may have arrived.
+      const freshConv = scrapeConversation(target().scope);
 
       setTimeout(() => {
         const reply = generateResponse(profile, freshConv);
@@ -1628,102 +1802,100 @@
 
     // Copy
     copyBtn.onclick = () => {
-      navigator.clipboard.writeText(responseArea.value).then(() => {
+      Promise.resolve(navigator.clipboard && navigator.clipboard.writeText(responseArea.value)).then(() => {
         copyBtn.textContent = '✅ Copied!';
         setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 2000);
       });
     };
 
     // Insert
-    insertBtn.onclick = () => insertIntoMessageBox(
-      responseArea.value,
-      findActiveScope(null) || panelScope
-    );
+    insertBtn.onclick = () => {
+      const { scope, composer } = target();
+      insertIntoMessageBox(responseArea.value, scope, composer);
+    };
   }
 
   // ═══════════════════════════════════════════
   //  7. INSERT INTO LINKEDIN MESSAGE BOX
   //  React-compatible: fires synthetic events like Auto Gmail
   // ═══════════════════════════════════════════
-  function insertIntoMessageBox(text, scope) {
+  function insertIntoMessageBox(text, scope, composer) {
     const boxSelectors = [
+      '.msg-form__contenteditable[contenteditable="true"]',
       '.msg-form__contenteditable div[contenteditable="true"]',
-      '.msg-form__contenteditable',
-      'div[role="textbox"][contenteditable="true"]',
-      'div[contenteditable="true"][class*="msg"]',
-      'div[aria-label*="Write a message"]',
-      'div[data-placeholder*="Write a message"]',
+      '.msg-form [contenteditable="true"]',
+      'div[contenteditable="true"][aria-label*="Write a message"]',
     ];
+    const attached = el => el && document.contains(el);
 
-    let box = null;
-
-    // Prefer the composer the user most recently typed in — that's the one
-    // tied to the currently-active conversation.
-    if (lastActiveComposer && document.contains(lastActiveComposer)) {
-      if (!scope || scope.contains(lastActiveComposer)) {
-        box = lastActiveComposer;
-      }
-    }
-
-    // Next, search within the explicit scope (button's own bubble).
-    if (!box && scope && document.contains(scope)) {
+    // 1. The composer of the chat the button belongs to (exact).
+    let box = attached(composer) ? composer : null;
+    // 2. Within this conversation's scope.
+    if (!box && attached(scope)) {
       for (const sel of boxSelectors) {
         box = scope.querySelector(sel);
         if (box) break;
       }
     }
-
-    // Finally, fall back to the document-wide first match.
+    // 3. The composer the user last typed in.
+    if (!box && attached(lastActiveComposer)) box = lastActiveComposer;
+    // Deliberately no document-wide fallback: guessing could write into
+    // another chat (or the feed's post box). Copy instead.
     if (!box) {
-      for (const sel of boxSelectors) {
-        box = document.querySelector(sel);
-        if (box) break;
-      }
-    }
-
-    if (!box) {
-      navigator.clipboard.writeText(text);
+      copyToClipboard(text);
       showDMToast('📋 Copied to clipboard — paste it in the message box!', 'success');
       return;
     }
 
-    box.focus();
-
-    // Clear existing content
-    box.innerHTML = '';
-
-    // Insert text as paragraphs
-    const paragraphs = text.split('\n').filter(l => l.trim());
-    paragraphs.forEach(p => {
-      const pEl = document.createElement('p');
-      pEl.textContent = p;
-      box.appendChild(pEl);
-    });
-
-    // Fire React-compatible synthetic events (inspired by Auto Gmail's approach)
-    // React listens on the root, so we need to fire native events that bubble
-    const nativeInputEvent = new InputEvent('input', {
-      bubbles: true,
-      cancelable: true,
-      inputType: 'insertText',
-      data: text,
-    });
-    box.dispatchEvent(nativeInputEvent);
-    box.dispatchEvent(new Event('change', { bubbles: true }));
-
-    // Also fire keyboard events to trigger LinkedIn's draft detection
-    box.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a', keyCode: 65 }));
-    box.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a', keyCode: 65 }));
-    box.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, key: 'a', keyCode: 65 }));
-
-    // Trigger React's internal value tracker if present
-    const tracker = box._valueTracker;
-    if (tracker) tracker.setValue('');
-
+    writeIntoComposer(box, text);
     showDMToast('✅ Reply inserted! Review and click Send when ready.', 'success');
-
     if (aiPanel) { aiPanel.remove(); aiPanel = null; }
   }
+
+  // Replace the composer's content with `text`. execCommand('insertText')
+  // goes through the browser's real editing pipeline, so LinkedIn's editor
+  // sees a genuine edit (draft saved, Send button enabled). If it's
+  // unavailable, build paragraphs by hand and fire an input event.
+  function writeIntoComposer(box, text) {
+    box.focus();
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(box);
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    let ok = false;
+    try { ok = document.execCommand('insertText', false, text); } catch (e) { ok = false; }
+
+    const normalize = s => (s || '').replace(/\s+/g, ' ').trim();
+    if (ok && normalize(box.innerText).includes(normalize(text).slice(0, 40))) return;
+
+    // Fallback: one <p> per line; blank lines become empty paragraphs so the
+    // gap between greeting and body survives.
+    box.innerHTML = '';
+    for (const line of text.split('\n')) {
+      const p = document.createElement('p');
+      if (line.trim()) p.textContent = line;
+      else p.appendChild(document.createElement('br'));
+      box.appendChild(p);
+    }
+    box.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+
+    // Caret at the end, ready for edits.
+    const end = document.createRange();
+    end.selectNodeContents(box);
+    end.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(end);
+  }
+
+  function copyToClipboard(text) {
+    try {
+      navigator.clipboard.writeText(text).catch(() => {});
+    } catch (e) { /* clipboard unavailable */ }
+  }
+
 
   // ═══════════════════════════════════════════
   //  8. TRAINING STUDIO UI
@@ -1929,14 +2101,12 @@
         if (relevant) break;
       }
 
-      if (!relevant && document.querySelector('.' + AI_BTN_CLASS)) return;
+      if (!relevant) return;
 
+      // A new chat bubble / thread may have appeared: make sure every
+      // composer has its own button (cheap when nothing is missing).
       clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        if (isOnMessagingPage() && !document.querySelector('.' + AI_BTN_CLASS)) {
-          injectAIReplyButton();
-        }
-      }, 800);
+      debounceTimer = setTimeout(injectAIReplyButton, 400);
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
@@ -1944,7 +2114,7 @@
 
   function init() {
     if (!location.hostname.includes('linkedin.com')) return;
-    console.log('[OutreachPro DM] 🚀 Initializing AI DM Response Generator v2');
+    log('🚀 Initializing AI DM Response Generator v2');
     injectDMStyles();
     attachActiveScopeTracking();
 
@@ -1952,9 +2122,8 @@
     const msgFormSelector = [
       '.msg-form__footer',
       '.msg-form__contenteditable',
-      'div[role="textbox"][contenteditable="true"]',
       '.msg-overlay-conversation-bubble',
-      'div[class*="msg-form"]',
+      MSG_FORM_SELECTOR,
     ].join(', ');
 
     // Try waitForElement first (efficient — no polling)
@@ -1963,9 +2132,8 @@
         setTimeout(injectAIReplyButton, 500);
       })
       .catch(() => {
-        console.log('[OutreachPro DM] No msg form found via waitForElement, injecting floating...');
-        // Always inject — floating button works everywhere
-        setTimeout(injectAIReplyButton, 1000);
+        // No chat open yet — the MutationObserver injects when one opens.
+        log('No chat composer yet; waiting for one to open');
       });
 
     // Also always try at intervals (LinkedIn is slow to load)
@@ -1980,16 +2148,16 @@
     setInterval(() => {
       if (location.href !== lastMsgUrl) {
         lastMsgUrl = location.href;
-        injectionAttempts = 0;
         // Drop any stale composer reference from the previous page/conv.
         lastActiveComposer = null;
-        // Clean up old buttons and panel
-        document.querySelectorAll('.' + AI_BTN_CLASS).forEach(b => b.remove());
+        // The panel was built for the previous conversation — close it.
+        // Buttons stay: each is tied to its own composer and scrapes at
+        // click time, so it is never stale.
         if (aiPanel) { aiPanel.remove(); aiPanel = null; }
 
-        // Re-inject after navigation
-        setTimeout(injectAIReplyButton, 1500);
-        setTimeout(injectAIReplyButton, 3500);
+        // Pick up any composer LinkedIn re-rendered during navigation.
+        setTimeout(injectAIReplyButton, 800);
+        setTimeout(injectAIReplyButton, 2500);
       }
     }, 1000);
   }
