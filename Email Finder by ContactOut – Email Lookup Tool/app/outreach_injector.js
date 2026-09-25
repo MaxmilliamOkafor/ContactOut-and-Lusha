@@ -747,6 +747,7 @@
       <div class="op-cv-prompt" id="op-cv-prompt">
         <span style="display:flex;gap:16px;align-items:center;width:100%;">
           <span style="display:flex;align-items:center;gap:6px;">📄 <a id="op-cv-link">Upload CV</a></span>
+          <span style="display:flex;align-items:center;gap:6px;">👤 <a id="op-details-link">My details</a></span>
           <span style="display:flex;align-items:center;gap:6px;">⚙️ <a id="op-settings-link">Settings & Signature</a></span>
         </span>
       </div>
@@ -788,10 +789,11 @@
         if (cv.summary || cv.skills || cv.experience || cv.cvFileName) {
           const prompt = panel.querySelector('#op-cv-prompt');
           if (prompt) {
+            const details = '<span style="display:flex;align-items:center;gap:6px;margin-left:auto;">👤 <a id="op-details-link">My details</a></span>';
             if (cv.cvFileName) {
-              prompt.innerHTML = `<span>📄</span><span>CV loaded: <strong>${esc(cv.cvFileName)}</strong> <a id="op-cv-link" style="margin-left:6px;">Change</a></span>`;
+              prompt.innerHTML = `<span style="display:flex;gap:16px;align-items:center;width:100%;"><span>📄 CV loaded: <strong>${esc(cv.cvFileName)}</strong> <a id="op-cv-link" style="margin-left:6px;">Change</a></span>${details}</span>`;
             } else {
-              prompt.style.display = 'none';
+              prompt.innerHTML = `<span style="display:flex;gap:16px;align-items:center;width:100%;">${details}</span>`;
             }
           }
         }
@@ -805,6 +807,7 @@
         if (out && typeof out.then === 'function') out.then(r => res((r && r[key]) || null)).catch(() => res(null));
       } catch (e) { res(null); }
     });
+    async function loadMe() {
     const manual = (await store('outreach_dm_my_details')) || {};
     const auto = (await store('outreach_dm_my_details_auto')) || {};
     const pickVal = k => (manual[k] && String(manual[k]).trim()) || auto[k] || '';
@@ -813,6 +816,8 @@
       years: pickVal('years') || ((cv.summary || '').match(/\b(\d{1,2})\+?\s+years/) || [])[1] || '',
       lookingFor: pickVal('lookingFor'),
     };
+    }
+    await loadMe();
 
     // Also load signature from settings
     try {
@@ -954,6 +959,19 @@
           cv = updatedCV;
           doGenerate();
         });
+      };
+    }
+
+    // My details (shared with AI Reply): role, what I'm looking for, …
+    const detailsLink = panel.querySelector('#op-details-link');
+    if (detailsLink) {
+      detailsLink.onclick = (e) => {
+        e.preventDefault();
+        if (typeof window.__outreachOpenMyDetails === 'function') {
+          window.__outreachOpenMyDetails(async () => { await loadMe(); doGenerate(); });
+        } else {
+          showToast('My details is still loading. Try again in a moment.', 'error');
+        }
       };
     }
 

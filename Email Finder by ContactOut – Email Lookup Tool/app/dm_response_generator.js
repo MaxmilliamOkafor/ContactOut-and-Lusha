@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  const AI_REPLY_VERSION = '1.6';
+  const AI_REPLY_VERSION = '1.8';
   const TRAINING_KEY = 'outreach_dm_training_profiles';
   const AI_BTN_CLASS = 'outreach-dm-ai-btn';
   const PANEL_ID = 'outreach-dm-ai-panel';
@@ -207,6 +207,12 @@
         box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
       }
       .outreach-dm-send:hover { filter: brightness(1.1); }
+      .outreach-dm-gear {
+        width: 28px; height: 28px; border-radius: 50%; padding: 0;
+        border: 1px solid rgba(99, 102, 241, 0.55); background: transparent;
+        color: inherit; font-size: 14px; line-height: 26px; cursor: pointer;
+      }
+      .outreach-dm-gear:hover { background: rgba(99, 102, 241, 0.15); }
       .outreach-dm-send:disabled { opacity: 0.6; cursor: default; }
       .${AI_BTN_CLASS}:hover {
         transform: translateY(-1px) scale(1.04);
@@ -2781,8 +2787,23 @@
       await insertAndSend(send, btn);
     });
 
-    group.append(btn, select, send);
+    group.append(btn, select, send, createDetailsButton());
     return group;
+  }
+
+  function createDetailsButton() {
+    const gear = document.createElement('button');
+    gear.type = 'button';
+    gear.className = 'outreach-dm-gear';
+    gear.textContent = '⚙';
+    gear.title = 'My details: CV link, notice period, salary, location… used in replies';
+    gear.setAttribute('aria-label', 'My details');
+    gear.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      openMyDetails();
+    });
+    return gear;
   }
 
   // Draft a reply for the chat `origin` belongs to and put it in the box.
@@ -2813,7 +2834,7 @@
     } else if (!conversation.messages.length) {
       showDMToast("Couldn't read this chat's messages, so this is a first-message draft.", 'error');
     } else if (gaps.length) {
-      showDMToast(`Fill in ${gaps.join(', ')} — or save it once in My details (right-click AI Reply).`, 'error');
+      showDMToast(`Fill in ${gaps.join(', ')} — or save it once in My details (⚙ next to AI Reply).`, 'error');
     }
     return { reply, conversation, composer, meta };
   }
@@ -3367,8 +3388,43 @@
       box.querySelectorAll('.dm-ai-detail').forEach(i => { if (i.value.trim()) out[i.dataset.key] = i.value.trim(); });
       storageSet({ [DETAILS_KEY]: out });
       showDMToast('✅ Details saved', 'success');
+      const modal = box.closest('#outreach-dm-details-modal');
+      if (modal) setTimeout(() => modal.remove(), 400);
+      if (typeof detailsSavedCallback === 'function') {
+        const cb = detailsSavedCallback;
+        detailsSavedCallback = null;
+        setTimeout(() => cb(out), 450);
+      }
     };
   }
+
+  // "My details" as its own window, opened from the ⚙ button next to AI
+  // Reply (LinkedIn and Gmail) or from the Connect panel.
+  let detailsSavedCallback = null;
+  async function openMyDetails(onSaved) {
+    const old = document.getElementById('outreach-dm-details-modal');
+    if (old) old.remove();
+    detailsSavedCallback = onSaved || null;
+    const overlay = document.createElement('div');
+    overlay.id = 'outreach-dm-details-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2147483646;display:flex;align-items:center;justify-content:center';
+    const card = document.createElement('div');
+    card.style.cssText = 'width:440px;max-width:92vw;max-height:86vh;overflow:auto;background:#fff;color:#111;border-radius:14px;padding:18px 20px;font:13px Inter,system-ui,sans-serif;box-shadow:0 20px 60px rgba(0,0,0,.35)';
+    card.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <strong style="font-size:15px">👤 My details</strong>
+        <button type="button" id="dm-md-close" aria-label="Close" style="border:none;background:none;font-size:20px;cursor:pointer;color:#666">×</button>
+      </div>
+      <div id="dm-ai-tab-details"></div>`;
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    card.querySelector('#dm-md-close').onclick = () => overlay.remove();
+    await renderMyDetails(card, null);
+    const firstInput = card.querySelector('input');
+    if (firstInput) firstInput.focus();
+  }
+  // Shared with the "Connect with AI message" panel (same extension world).
+  window.__outreachOpenMyDetails = openMyDetails;
 
   async function renderTrainingStudio(panel) {
     const container = panel.querySelector('#dm-ai-tab-training');
@@ -3811,7 +3867,7 @@
       }
     });
 
-    group.append(btn, select);
+    group.append(btn, select, createDetailsButton());
     return group;
   }
 
