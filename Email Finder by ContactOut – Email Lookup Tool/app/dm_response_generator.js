@@ -13,6 +13,7 @@
 (function () {
   'use strict';
 
+  const AI_REPLY_VERSION = '1.6';
   const TRAINING_KEY = 'outreach_dm_training_profiles';
   const AI_BTN_CLASS = 'outreach-dm-ai-btn';
   const PANEL_ID = 'outreach-dm-ai-panel';
@@ -1045,10 +1046,19 @@
 
     // Connection degree ("· 1st") from this conversation's header/profile card.
     let partnerDegree = paneDegree;
-    if (!partnerDegree && containers.length) {
-      const head = readText(containers[containers.length - 1]).slice(0, 1500);
-      const dm = head.match(/[·•]\s*(1st|2nd|3rd\+?)\b/i);
-      if (dm) partnerDegree = dm[1].toLowerCase();
+    if (!partnerDegree) {
+      // Profile card first, then the thread's container, then the whole
+      // conversation column around the composer.
+      const sources = [];
+      const card = root.querySelector && root.querySelector('.msg-s-profile-card');
+      if (card) sources.push(card);
+      if (containers.length) sources.push(containers[containers.length - 1]);
+      const col = composer && composer.isConnected ? paneFor(composer) : null;
+      if (col) sources.push(col);
+      for (const el of sources) {
+        const dm = readText(el).slice(0, 2000).match(/[·•]\s*(1st|2nd|3rd\+?)\b/i);
+        if (dm) { partnerDegree = dm[1].toLowerCase(); break; }
+      }
     }
 
     // ─── Whose turn is it? ───
@@ -1207,11 +1217,18 @@
     // I sent the last message and they haven't replied: write a follow-up,
     // not a reply to their older message.
     context.partnerHeadline = conversation.partnerHeadline || '';
+    context.partnerKey = conversation.partnerName || '';
     if (conversation.lastFromMe) {
       // They accepted my invite (my note is the only message, they're now a
       // 1st-degree connection, no reply yet): thank them and move forward —
       // never "bump" someone who just said yes.
-      const accepted = !conversation.partnerReplied && conversation.partnerDegree === '1st' && conversation.myCount === 1;
+      // If the page doesn't show the degree, a thread holding only my short
+      // invite note (LinkedIn notes are ≤300 characters and mention
+      // connecting) means they accepted it: the thread only appears then.
+      const noteOnly = !conversation.partnerReplied && conversation.myCount === 1;
+      const degree = conversation.partnerDegree;
+      const inviteNote = (conversation.myLatest || '').length <= 300 && /\bconnect/i.test(conversation.myLatest || '');
+      const accepted = noteOnly && (degree === '1st' || (!degree && inviteNote));
       context.lastIntent = accepted ? 'accepted' : 'awaiting';
       context.isFirstMessage = false;
       // A follow-up within a couple of days of my last message reads as spam.
@@ -1273,6 +1290,12 @@
       "consider me your go-to(?:\\s+\\w+){0,4}",
       "(?:genuinely\\s+)?blown away(?:\\s+\\w+){0,6}",
       "mind if I (?:share|send) a quick overview",
+      "(?:in case )?it got buried",
+      "(?:in case )?it slipped through",
+      "bumping this(?: up)?",
+      "before it sinks",
+      "just (?:a )?(?:quick )?ping",
+      "circling back",
     ];
     const cringeRe = new RegExp(
       "(^\\s*|[\\n.!?]\\s*)" + subjectPrefix + "(?:" + cringeSentence.join("|") + ")[^.!?\\n]*[.!?]?",
@@ -1689,7 +1712,12 @@
     h = h.replace(/\s+(?:at|@)\s+.*$/i, '').trim();
     if (!h || h.length > 70) return '';
     const at = company ? ` at ${company}` : '';
-    if (/^[A-Za-z]+ing\b/.test(h)) return `your work ${h.charAt(0).toLowerCase() + h.slice(1)}${at}`;
+    // "Leading EMEA strategy" is something they do; "Engineering Manager" is a
+    // job title even though it starts with -ing.
+    const [w1, w2 = ''] = h.split(/\s+/);
+    const VERBS = /^(leading|building|helping|driving|scaling|connecting|hiring|recruiting|managing|running|growing|empowering|supporting|designing|creating|making|bringing|shaping|transforming|delivering|developing|partnering|championing|enabling|advising|coaching|investing|founding)$/i;
+    const TITLE_WORD = /^(manager|lead|partner|director|engineer|specialist|coordinator|consultant|officer|associate|executive|analyst|advisor|adviser|head|recruiter|team)$/i;
+    if (VERBS.test(w1) && !TITLE_WORD.test(w2)) return `your work ${h.charAt(0).toLowerCase() + h.slice(1)}${at}`;
     return `your work as ${/^[aeiou]/i.test(h) ? 'an' : 'a'} ${h}${at}`;
   }
 
@@ -1708,29 +1736,60 @@
   }
 
   // I sent the last message and haven't heard back.
-  function buildNudgeReply(ctx, tone) {
-    // Remind them what I'm after, in my own words, when I said it.
-    const seeking = extractSeeking(ctx.myMessagesText);
-    if (seeking) {
-      const personal = {
-        professional: `Just following up on my note above in case it got buried. If you're hiring for ${seeking}, I'd be glad to have a quick chat.`,
-        casual: `Just bumping this in case it got buried. If you're hiring for ${seeking}, I'd be keen to chat.`,
-        enthusiastic: `Just following up on my note above in case it got buried. If you're hiring for ${seeking}, I'd be glad to have a quick chat.`,
-        witty: `Bumping this up before it sinks. If you're hiring for ${seeking}, I'd be glad to have a quick chat.`,
-      };
-      return personal[tone] || personal.professional;
-    }
-    const replies = {
-      professional: [
-        'Just following up on my note above in case it got buried. Would be good to find a time to chat if you have a moment this week.',
-        'Bumping this up in case it slipped through. No pressure either way, happy to find a time whenever suits.',
-      ],
-      casual: ['Just bumping this in case it got buried. No pressure either way.'],
-      enthusiastic: ['Just following up on my note above in case it got buried. Would be good to chat when you have a moment.'],
-      witty: ['Bumping this up before it sinks below the recruiter spam. No pressure either way.'],
-    };
-    return pick(replies[tone] || replies.professional);
+  // Different people get different wording; clicking again for the same
+  // person moves to the next version.
+  const variantClicks = new Map();
+  function variantFor(key, n) {
+    let h = 0;
+    for (const c of String(key || '')) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    const k = String(key || '');
+    const clicks = variantClicks.get(k) || 0;
+    variantClicks.set(k, clicks + 1);
+    return n ? (h + clicks) % n : 0;
   }
+
+  // I sent the last message and they haven't replied (a few days on).
+  // Professional, specific to what I actually asked for, and varied.
+  function buildNudgeReply(ctx, tone) {
+    const seeking = extractSeeking(ctx.myMessagesText);
+    const company = ctx.partnerCompany;
+    const about = headlinePhrase(ctx.partnerHeadline, company) || (company ? `your work at ${company}` : '');
+    const purpose = specificPurpose(ctx.myLatest) || specificPurpose(ctx.myOpener);
+    const short = tone === 'casual' || ctx.style === 'direct';
+    let options;
+
+    if (seeking) {
+      options = short ? [
+        `Following up on my last message. If you're recruiting for ${seeking}, I'd be keen to chat.`,
+        `A quick follow-up: I'm exploring ${seeking}. If anything on your side fits, I'd be glad to talk.`,
+      ] : [
+        `I wanted to follow up on my earlier message. I'm currently exploring ${seeking}, and I'd welcome a brief conversation if you're recruiting for anything similar.`,
+        `Following up on my previous message: if you have any openings in ${seeking.replace(/\broles?\b|\bpositions?\b|\bopportunities\b|\bjobs?\b/i, '').replace(/\s+/g, ' ').trim()}, I'd be glad to share more about my background.`,
+        `I appreciate you're busy, so I'll keep this brief. I'm exploring ${seeking} and would value a short conversation if there's a potential fit on your side.`,
+      ].concat(company ? [`I wanted to follow up on my earlier note. If ${company} is hiring for ${seeking}, I'd be glad to discuss how my experience could help.`] : []);
+    } else if (/collaborate/.test(purpose || '')) {
+      const topic = about || 'your work';
+      options = short ? [
+        `Following up on my last message. Open to a short chat about ${topic}?`,
+        `A quick follow-up: I'd still like to hear more about ${topic} and see if there's scope to work together.`,
+      ] : [
+        `I wanted to follow up on my earlier message. I'd welcome the chance to learn more about ${topic} and explore whether there's scope to collaborate.`,
+        `Following up on my previous note: I'd value a short conversation about ${topic} if you're open to it.`,
+        `I appreciate your time is limited, so I'll keep this brief. Would you be open to a 15-minute conversation about ${topic} in the coming weeks?`,
+      ];
+    } else {
+      options = short ? [
+        'Following up on my last message. Happy to find a time that suits you.',
+        'A quick follow-up on my last message, in case a short chat would be useful.',
+      ] : [
+        "I wanted to follow up on my earlier message in case it's of interest. Happy to find a time that suits you.",
+        "Following up on my previous note. If a short conversation would be useful, I'd be glad to arrange one at a time that suits you.",
+        "I appreciate you're busy, so I'll keep this brief. Would you be open to a short conversation in the coming weeks?",
+      ];
+    }
+    return options[variantFor('nudge:' + (ctx.partnerKey || ''), options.length)];
+  }
+
 
   // ═══════════════════════════════════════════
   //  ANSWER ENGINE — reply to what they actually asked
@@ -2680,7 +2739,7 @@
     btn.type = 'button'; // never submit the surrounding LinkedIn form
     btn.className = AI_BTN_CLASS;
     btn.innerHTML = '<span style="animation:dm-ai-sparkle 2s ease-in-out infinite;display:inline-flex">✨</span><span>AI Reply</span>';
-    btn.title = 'Draft a reply to this conversation (right-click: outcome, My details, training)';
+    btn.title = `AI Reply ${AI_REPLY_VERSION}: draft a reply to this conversation (right-click: outcome, My details, training)`;
     btn.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -3058,7 +3117,7 @@
           <button class="dm-ai-insert-btn" id="dm-ai-insert-send" style="display:none">➤ Insert &amp; Send</button>
         </div>
       </div>
-      <div class="dm-ai-footer">Powered by <span class="hl">OutreachPro</span> — <span class="hl">∞ Unlimited</span> AI replies</div>
+      <div class="dm-ai-footer">OutreachPro AI Reply <span class="hl">v${AI_REPLY_VERSION}</span></div>
     `;
 
     document.body.appendChild(panel);
@@ -3712,7 +3771,7 @@
     btn.type = 'button';
     btn.className = AI_BTN_CLASS;
     btn.innerHTML = '<span style="display:inline-flex">✨</span><span>AI Reply</span>';
-    btn.title = 'Draft a reply to this email thread';
+    btn.title = `AI Reply ${AI_REPLY_VERSION}: draft a reply to this email thread`;
     btn.addEventListener('click', async e => {
       e.preventDefault();
       e.stopPropagation();
