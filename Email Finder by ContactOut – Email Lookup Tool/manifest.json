@@ -112,6 +112,11 @@
       "match_about_blank": true
     },
     {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["/app/dm_response_generator.js"],
+      "run_at": "document_idle"
+    },
+    {
       "matches": [
         "*://*.linkedin.com/home",
         "*://*.linkedin.com/authwall",

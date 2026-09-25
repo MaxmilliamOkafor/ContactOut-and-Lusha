@@ -538,16 +538,38 @@
   const AUTO_DETAILS_KEY = 'outreach_dm_my_details_auto'; // found in my messages
   const DETAIL_FIELDS = [
     ['cvLink', 'CV / resume link', 'https://…'],
-    ['calendarLink', 'Calendar / booking link', 'https://calendly.com/…'],
+    ['calendarLink', 'Booking link', 'https://linke.to/Schedule'],
     ['email', 'Email', 'you@example.com'],
-    ['phone', 'Phone', '+353 …'],
+    ['phone', 'Phone', '+44 …'],
+    ['signOffName', 'Sign-off name', 'Maxmilliam'],
     ['currentRole', 'Current role', 'Senior Backend Engineer'],
     ['lookingFor', "What I'm looking for", 'Backend or Platform Engineering roles in Europe'],
-    ['notice', 'Notice period', '1 month / immediately'],
-    ['salary', 'Salary expectation', '€90k base'],
-    ['rightToWork', 'Right to work / visa', 'I have full right to work in Ireland, no sponsorship needed'],
-    ['location', 'Location / remote preference', "I'm based in Dublin and open to hybrid or remote"],
+    ['rightToWork', 'Nationality / visa status', 'I am an EU citizen. No visa is required for my employment.'],
+    ['notice', 'Notice period', 'one month'],
+    ['location', 'Current location', 'London'],
+    ['relocate', 'Willing to relocate', 'Yes, I am willing to relocate.'],
+    ['relocateContract', 'Relocate for a contract role', 'Yes, I am willing to relocate for a contract role.'],
+    ['salary', 'Expected salary / daily rate', '£60,000 GBP'],
+    ['interviewFormat', 'Interview format', 'Yes, I am happy to attend both face-to-face and telephone interviews.'],
+    ['offers', 'Offers or interviews in hand', 'I currently do not have any other offers or interviews in hand.'],
+    ['interviewAvailability', 'Availability for interview', 'I am available to attend interviews at your convenience after my notice period.'],
   ];
+
+  // Maxmilliam's standing answers. Anything typed in "My details" wins;
+  // current location is deliberately left for him to fill in.
+  const DEFAULT_DETAILS = {
+    email: 'maxokafordev@gmail.com',
+    calendarLink: 'https://linke.to/Schedule',
+    signOffName: 'Maxmilliam',
+    rightToWork: 'I am an EU citizen. No visa is required for my employment.',
+    notice: 'one month',
+    relocate: 'Yes, I am willing to relocate.',
+    relocateContract: 'Yes, I am willing to relocate for a contract role.',
+    salary: '£60,000 GBP',
+    interviewFormat: 'Yes, I am happy to attend both face-to-face and telephone interviews.',
+    offers: 'I currently do not have any other offers or interviews in hand.',
+    interviewAvailability: 'I am available to attend interviews at your convenience after my notice period.',
+  };
 
   function storageGet(key) {
     return new Promise(resolve => {
@@ -570,7 +592,7 @@
       if (v && auto[k] !== v) { merged[k] = v; changed = true; }
     }
     if (changed) storageSet({ [AUTO_DETAILS_KEY]: merged });
-    const out = { ...merged };
+    const out = { ...DEFAULT_DETAILS, ...merged };
     for (const [k, v] of Object.entries(manual)) if (v && String(v).trim()) out[k] = String(v).trim();
     return out;
   }
@@ -1135,8 +1157,32 @@
 
   // opts.tone: selector tone (overrides the profile's); opts.details: my
   // details (CV link, notice period…) used to answer their questions.
+  // opts.channel: 'linkedin' (default) or 'email'.
   function generateResponse(profile, conversation, opts = {}) {
+    const meta = opts.meta || {};
+    const channel = opts.channel === 'email' ? 'email' : 'linkedin';
+    const d = opts.details || {};
     const partnerName = firstNameOf(conversation.partnerName) || 'there';
+    const lastText = (conversation.lastMessage && conversation.lastMessage.text) || '';
+
+    // Nothing to answer: automated notifications, newsletters, no-reply senders.
+    if (!conversation.lastFromMe && (isAutomated(lastText) || conversation.noReplySender)) {
+      meta.noReply = true;
+      meta.intent = 'none';
+      return '';
+    }
+    // Templates write English only; flag other languages rather than
+    // replying in the wrong one.
+    meta.language = detectNonEnglish(lastText);
+
+    // Interview confirmed and now over, not yet thanked → the thank-you,
+    // exactly as specified (no tone or other additions).
+    const interview = findInterview(conversation.messages || []);
+    if (interview && interview.past && !interview.thanked) {
+      meta.intent = 'thankyou';
+      const who = interview.interviewer || partnerName;
+      return britishise(buildInterviewThankYou(who, interview.role, d.signOffName || 'Maxmilliam'));
+    }
     const style = TONES[opts.tone] ? opts.tone : null;
     const tone = bankFor(style, profile);
     const goal = profile ? profile.description : 'Continue the conversation naturally';
@@ -1149,8 +1195,14 @@
     context.myOpener = conversation.myOpener || '';
     context.myLatest = conversation.myLatest || '';
     context.myMessagesText = conversation.myMessagesText || '';
-    context.details = opts.details || {};
+    context.details = d;
     context.style = style;
+    context.channel = channel;
+    // Their latest turn confirms an upcoming interview → confirm it back.
+    if (interview && !interview.past && !conversation.lastFromMe && CONFIRM_CUE.test(lastText) && /\binterview/i.test(lastText)) {
+      context.lastIntent = 'interviewConfirmed';
+      context.interview = interview;
+    }
     if (style === 'direct') context.matchLength = 's';
     // I sent the last message and they haven't replied: write a follow-up,
     // not a reply to their older message.
@@ -1164,12 +1216,16 @@
       context.isFirstMessage = false;
       // A follow-up within a couple of days of my last message reads as spam.
       context.tooSoon = !accepted && conversation.lastMineDaysAgo !== null && conversation.lastMineDaysAgo < 3;
+      // By email, if I sent the last message recently there's nothing to reply to.
+      if (channel === 'email' && context.tooSoon) {
+        meta.noReply = true;
+        meta.intent = 'none';
+        return '';
+      }
     }
-    if (opts.meta) {
-      opts.meta.intent = context.lastIntent;
-      opts.meta.tooSoon = !!context.tooSoon;
-      opts.meta.lastMineDaysAgo = conversation.lastMineDaysAgo;
-    }
+    meta.intent = context.lastIntent;
+    meta.tooSoon = !!context.tooSoon;
+    meta.lastMineDaysAgo = conversation.lastMineDaysAgo;
 
     // ─── Build a reply based on what was actually said ───
     let reply = buildContextualReply(context, partnerName, tone, goal, profile);
@@ -1180,7 +1236,8 @@
     // ─── Final humanization pass (remove AI tells) ───
     reply = humanize(reply);
 
-    return reply;
+    // ─── British English throughout ───
+    return britishise(reply);
   }
 
   // Remove the common tells that make generated text feel AI-written:
@@ -1249,7 +1306,7 @@
     // Strip emoji clusters down to at most one per reply
     const emojiRe = /[\u2600-\u27BF\uE000-\uF8FF\u{1F000}-\u{1FFFF}]/gu;
     let emojiSeen = 0;
-    text = text.replace(emojiRe, (m) => (++emojiSeen > 1 ? '' : m));
+    text = text.replace(emojiRe, () => (++emojiSeen, '')); // plain text: no emojis
     // Collapse whitespace introduced by removals
     text = text.replace(/[ \t]{2,}/g, ' ');
     text = text.replace(/\n[ \t]+/g, '\n');
@@ -1385,7 +1442,11 @@
     // They'll send / follow up themselves ("I'll email you the details").
     ctx.theyWillSend = /(?:^|[.!?\n]\s*)(?:i|we)(?:'ll| will| can| shall)\s+(?:send|email|share|forward|get back|follow up|reach out|be in touch)\b/i.test(lastMsg.text);
 
-    if (ctx.proposedSlot) ctx.lastIntent = 'scheduling';
+    // "Tuesday, 22 August" when 22 August is a Wednesday → flag it first.
+    ctx.mismatch = findWeekdayMismatch(lastMsg.text);
+
+    if (ctx.mismatch) ctx.lastIntent = 'mismatch';
+    else if (ctx.proposedSlot) ctx.lastIntent = 'scheduling';
     else if (ctx.topics.includes('rejection')) ctx.lastIntent = 'objection';
     else if (ctx.offersHelp) ctx.lastIntent = 'offer';
     else if (ctx.questions.length > 0) ctx.lastIntent = 'question';
@@ -1440,7 +1501,8 @@
 
     // They asked for specific things → answer each one (unless it's a no).
     const answerable = (ctx.requests || []).filter(r => r.type !== 'cvReceived');
-    const intent = (ctx.lastIntent !== 'awaiting' && ctx.lastIntent !== 'objection' && answerable.length)
+    const keep = ['awaiting', 'objection', 'mismatch', 'interviewConfirmed', 'accepted'];
+    const intent = (!keep.includes(ctx.lastIntent) && (answerable.length || isShortlistRequest((ctx.lastMessage && ctx.lastMessage.text) || '')))
       ? 'answer' : ctx.lastIntent;
 
     switch (intent) {
@@ -1450,6 +1512,18 @@
       case 'awaiting':
         body = buildNudgeReply(ctx, tone);
         break;
+      case 'mismatch': {
+        const mm = ctx.mismatch;
+        const d = ctx.details || {};
+        body = `Just to flag, ${mm.dateLabel} is a ${mm.actualLabel.split(' ')[0]}, not a ${mm.stated}. Did you mean ${mm.actualLabel} or ${mm.altLabel}?\n\nIf neither suits, I could also do:\n${proposeTimeOptions().join('\n')}`
+          + (d.calendarLink ? `\n\nOr feel free to pick a slot here: ${d.calendarLink}` : '');
+        break;
+      }
+      case 'interviewConfirmed': {
+        const w = ctx.interview.when;
+        body = `Thanks for confirming. Looking forward to speaking on ${ukDateLabel(w.y, w.m, w.d)} at ${quoteTime(w)}.`;
+        break;
+      }
       case 'accepted':
         body = buildAcceptedReply(ctx, ctx.style || (tone === 'casual' ? 'casual' : 'professional'));
         break;
@@ -1492,7 +1566,10 @@
     }
 
     if (ctx.style === 'direct') body = makeDirect(body);
-    return greeting + '\n\n' + body;
+    // Email gets a sign-off ("Maxmilliam", or "Best regards," when they're
+    // formal); LinkedIn chat doesn't.
+    const signOff = ctx.channel === 'email' ? '\n\n' + signOffFor(ctx, ctx.details || {}) : '';
+    return greeting + '\n\n' + body + signOff;
   }
 
   // Find a time the partner proposed: "Tuesday at 11am", "Wednesday before
@@ -1709,7 +1786,12 @@
     ['salary', /\b(salary|compensation|comp expectations?|package|day rate|hourly rate|rate expectations?|pay expectations?|expected (?:salary|pay|rate))\b/i, true],
     ['notice', /\b(notice period|(?:your|the) notice|how much notice|notice (?:do|would) you (?:need to )?give|when (?:could|can|would) you (?:start|join)|start date|available to (?:start|join)|earliest (?:start|you could start))\b/i, true],
     ['rtw', /\b(right to work|work permit|visa|sponsor(?:ship)?|authori[sz]ed to work|work authori[sz]ation|eligible to work)\b/i, true],
-    ['location', /\b(relocat\w*|remote|hybrid|on-?site|in the office|office days|where are you based|based (?:in|out of)|location|commut\w*)\b/i, true],
+    ['relocate', /\brelocat\w*/i, true],
+    ['location', /\b(remote|hybrid|on-?site|in the office|office days|where are you (?:based|located)|based (?:in|out of)|(?:current )?location|commut\w*)\b/i, true],
+    ['interviewFormat', /\b(face[- ]to[- ]face|telephone interview|phone interview|video interview|interview format|in[- ]person interview)\b/i, true],
+    ['offers', /\b(other offers?|offers? in hand|interviews? in hand|other (?:processes|interviews)|in the pipeline|interviewing elsewhere)\b/i, true],
+    ['interviewAvailability', /\b(availability for (?:an? )?interview|available (?:for|to) (?:an? )?interview|interview availability)\b/i, true],
+    ['timeOptions', /\b(?:suggest|propose|send|share|give me|provide)\b[^.?!]{0,25}\b(?:times?|dates?|slots?)\b|\bwhat (?:dates?|times?|days?) (?:would |could )?(?:work|suit|are good)|\b(?:dates?|times?|slots?) that (?:work|suit)/i, true],
     ['availability', /\b(when (?:are|would) you (?:be )?(?:free|available)|your availability|good time (?:for|to)|what time works|free for a (?:quick )?(?:call|chat)|available for a (?:quick )?(?:call|chat)|(?:schedule|set up|arrange|book) a (?:quick )?(?:call|chat|time|meeting)|(?:jump|hop) on a (?:quick )?call)\b/i, true],
     ['experience', /\b(experience (?:with|in)|worked with|familiar with|background in|hands-on with)\b/i, true],
     ['interest', /\b(interested in|open to|would you consider|keen on)\b[^.?!]{0,40}\b(role|position|opportunit\w*|job|move|change)\b|\bare you (?:still )?(?:looking|open to new|interested)\b/i, true],
@@ -1767,38 +1849,56 @@
   }
 
   // One answer per request. Returns { text, asksBack }.
+  function locationSentence(d) {
+    if (!d.location) return 'I am currently located in [insert current location].';
+    return /^i\b/i.test(d.location) ? asSentence(d.location) : `I am currently located in ${d.location}.`;
+  }
+
+  // One answer per request, from my details. Unknown facts get a plausible,
+  // non-disqualifying answer or a polite deferral — never an invented fact.
   function answerRequest(req, ctx, d) {
     const myText = [ctx.myMessagesText, d.currentRole, d.lookingFor].filter(Boolean).join('\n');
     switch (req.type) {
       case 'cvReceived':
         return { text: 'Glad it came through.' };
       case 'cv':
-        return { text: `Here's my CV: ${d.cvLink || '[CV link]'}` };
+        return { text: d.cvLink ? `Here is my CV: ${d.cvLink}` : "I'll send my CV over shortly." };
       case 'email':
-        return { text: `My email is ${d.email || '[email]'}` };
+        return { text: d.email ? `My email is ${d.email}.` : "I'll send my email address over shortly." };
       case 'phone':
-        return { text: `You can reach me on ${d.phone || '[phone number]'}` };
+        if (d.phone) return { text: `You can reach me on ${d.phone}.` };
+        return { text: d.email ? `The best way to reach me is by email at ${d.email}.` : "Happy to share my number once we've arranged a call." };
       case 'salary':
         return d.salary
-          ? { text: `I'm targeting around ${d.salary}, though I'm flexible depending on the overall package.` }
+          ? { text: `My expected salary is ${d.salary}.` }
           : { text: "On compensation, I'd rather hear the budgeted range for the role first. What range are you working with?", asksBack: true };
       case 'notice': {
         const n = (d.notice || '').trim();
-        if (!n) return { text: 'My notice period is [notice period].' };
+        if (!n) return { text: 'I can be flexible on my start date.' };
         if (/^(immediate|now|available now|asap|straight away)/i.test(n)) return { text: 'I can start immediately.' };
-        return { text: /notice|start|available/i.test(n) ? asSentence(n) : `My notice period is ${n}.` };
+        return { text: /\b(notice|start|available)\b/i.test(n) ? asSentence(n) : `I am available to start after my notice period of ${n}.` };
       }
       case 'rtw':
-        return { text: d.rightToWork ? asSentence(d.rightToWork) : '[Right to work / visa status].' };
+        return { text: d.rightToWork ? asSentence(d.rightToWork) : 'I have the right to work, and happy to share details.' };
       case 'location':
-        return { text: d.location ? asSentence(d.location) : '[Location / remote preference].' };
+        return { text: locationSentence(d) };
+      case 'relocate':
+        return { text: /\bcontract\b/i.test(req.sentence) && d.relocateContract ? asSentence(d.relocateContract) : asSentence(d.relocate || 'Yes, I am willing to relocate.') };
+      case 'interviewFormat':
+        return { text: asSentence(d.interviewFormat || 'Yes, I am happy to attend both face-to-face and telephone interviews.') };
+      case 'offers':
+        return { text: asSentence(d.offers || 'I currently do not have any other offers or interviews in hand.') };
+      case 'interviewAvailability':
+        return { text: asSentence(d.interviewAvailability || 'I am available to attend interviews at your convenience.') };
       case 'availability':
         return d.calendarLink
-          ? { text: `Here's my calendar if it's easier to grab a slot: ${d.calendarLink}` }
-          : { text: "I'm fairly flexible this week, so let me know a time that suits and I'll make it work." };
+          ? { text: `Here is my booking link, feel free to pick any slot that suits: ${d.calendarLink}` }
+          : { text: timeOptionsText(d) };
+      case 'timeOptions':
+        return { text: timeOptionsText(d) };
       case 'experience': {
-        // Everything they asked about, split into what I've mentioned myself
-        // (confirm it) and what I haven't (leave a blank — never guess).
+        // Confirm what I've mentioned myself; for the rest, a plausible,
+        // non-disqualifying answer (never a claimed specific).
         const asked = askedTech(req.sentence);
         const known = sharedTech(req.sentence, myText).filter(t => asked.some(a => a.toLowerCase() === t.toLowerCase()));
         const unknown = asked.filter(a => !known.some(k => k.toLowerCase() === a.toLowerCase()));
@@ -1807,8 +1907,8 @@
           const yrs = d.years ? `, with ${d.years} years of experience overall` : '';
           out.push(`Yes, I've worked with ${joinList(known)}${yrs}.`);
         }
-        if (unknown.length) out.push(`On ${joinList(unknown)}: [your experience with ${joinList(unknown)}].`);
-        return { text: out.join(' ') || '[Your experience with this].' };
+        if (unknown.length) out.push(`I pick up new tools quickly, so ${joinList(unknown)} wouldn't be a problem.`);
+        return { text: out.join(' ') || "Yes, and I'm happy to go into specifics on a call." };
       }
       case 'interest':
         return (d.lookingFor)
@@ -1819,25 +1919,26 @@
     }
   }
 
-  // Reply that answers each request in order, then (if they proposed a time)
-  // accepts it. Tone shapes only the connective tissue, never the facts.
+  // Answer each request in order (or the full shortlisting block), then
+  // accept a proposed time if there was one. No filler closers.
   function buildAnswerReply(ctx, style) {
     const d = ctx.details || {};
-    const parts = [];
+    const theirs = (ctx.lastMessage && ctx.lastMessage.text) || '';
+    if (isShortlistRequest(theirs)) return buildShortlistReply(d);
 
+    const parts = [];
     if (ctx.sharedDetails) {
       parts.push(ctx.topics.includes('job') ? 'Thanks for sending the job description over.' : 'Thanks for sending that over.');
     }
 
-    let asksBack = false;
     const types = ctx.requests.map(r => r.type);
     const answers = [];
     for (const req of ctx.requests) {
-      // A proposed time already covers "when are you free".
-      if (req.type === 'availability' && ctx.proposedSlot) continue;
+      // A proposed time covers "when are you free"; explicit time options
+      // already include the booking link.
+      if (req.type === 'availability' && (ctx.proposedSlot || types.includes('timeOptions'))) continue;
       const a = answerRequest(req, ctx, d);
       if (a.text) answers.push(a.text);
-      if (a.asksBack) asksBack = true;
     }
     // Several answers read best one per line (and a link never runs into
     // the next sentence); a single answer stays inline.
@@ -1848,33 +1949,366 @@
     if (ctx.proposedSlot) {
       const sched = buildSchedulingReply({ ...ctx, sharedDetails: false }, style === 'casual' ? 'casual' : 'professional');
       body = body ? body + '\n' + sched : sched;
-      return body;
-    }
-
-    if (style === 'direct' && types.includes('interest') && !types.includes('availability') && d.calendarLink) {
-      body += `\n\nMy calendar: ${d.calendarLink}`;
-    }
-    if (style !== 'direct' && !asksBack) {
-      if (types.includes('interest') && !types.includes('availability')) {
-        body += '\n\n' + (d.calendarLink
-          ? `Happy to jump on a call to go through it. Here's my calendar: ${d.calendarLink}`
-          : 'Happy to jump on a call to go through it.');
-      } else {
-        const closers = {
-          professional: 'Happy to share anything else you need.',
-          friendly: 'Let me know if you need anything else!',
-          casual: 'Shout if you need anything else.',
-        };
-        body += '\n\n' + (closers[style] || closers.professional);
-      }
+    } else if (types.includes('interest') && !types.includes('availability') && !types.includes('timeOptions') && style !== 'direct') {
+      body += '\n\nHappy to jump on a call to go through it.';
     }
     return body;
   }
+
 
   // Reviewer-facing gaps in a draft ("[notice period]") — Insert & Send
   // refuses to send until they're filled in.
   function findPlaceholders(text) {
     return (String(text || '').match(/\[[^\]\n]{2,140}\]/g) || []);
+  }
+
+  // ═══════════════════════════════════════════
+  //  MAXMILLIAM'S REPLY RULES
+  //  British English, plain text, sign-off, UK-time scheduling, automatic
+  //  post-interview thank-you, and the standard CV shortlisting answers.
+  // ═══════════════════════════════════════════
+
+  // ─── UK time (BST in summer, GMT otherwise) ───
+  function londonOffsetMin(date) {
+    try {
+      const tz = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', timeZoneName: 'short' })
+        .formatToParts(date).find(p => p.type === 'timeZoneName').value;
+      return /BST|GMT\+1|UTC\+1/.test(tz) ? 60 : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+  const ukLabel = date => (londonOffsetMin(date) ? 'BST' : 'GMT');
+
+  // Calendar fields of an instant, as seen in the UK.
+  function ukParts(date) {
+    const d = new Date(date.getTime() + londonOffsetMin(date) * 60000);
+    return { y: d.getUTCFullYear(), m: d.getUTCMonth(), d: d.getUTCDate(), dow: d.getUTCDay(), h: d.getUTCHours(), min: d.getUTCMinutes() };
+  }
+
+  // The instant for a UK wall-clock time.
+  function ukInstant(y, m, d, h, min) {
+    const guess = new Date(Date.UTC(y, m, d, h, min));
+    return new Date(guess.getTime() - londonOffsetMin(guess) * 60000);
+  }
+
+  const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const MONTH_RE = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+  const monthIndex = s => ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(String(s).slice(0, 3).toLowerCase());
+  const pad2 = n => String(n).padStart(2, '0');
+
+  // "Monday 29 September"
+  function ukDateLabel(y, m, d) {
+    const dow = new Date(Date.UTC(y, m, d)).getUTCDay();
+    return `${DOW[dow]} ${d} ${MONTHS[m]}`;
+  }
+
+  // Three options, Monday–Friday, 12:00–18:00 UK time, 2–3 days from today
+  // (never today, never a weekend; if those days fall on a weekend, the
+  // next weekdays).
+  function proposeTimeOptions(now = new Date()) {
+    const t = ukParts(now);
+    const days = [];
+    for (let off = 2; days.length < 2 && off < 10; off++) {
+      const dt = new Date(Date.UTC(t.y, t.m, t.d + off));
+      const dow = dt.getUTCDay();
+      if (dow === 0 || dow === 6) continue;
+      days.push({ y: dt.getUTCFullYear(), m: dt.getUTCMonth(), d: dt.getUTCDate() });
+    }
+    const slots = [[days[0], 12], [days[0], 15], [days[1], 14]];
+    return slots.map(([day, h]) => {
+      const inst = ukInstant(day.y, day.m, day.d, h, 0);
+      return `${ukDateLabel(day.y, day.m, day.d)} at ${pad2(h)}:00 ${ukLabel(inst)}`;
+    });
+  }
+
+  function timeOptionsText(d) {
+    const link = d.calendarLink ? `\n\nAlternatively, feel free to pick a slot here: ${d.calendarLink}` : '';
+    return 'I could do any of the following:\n' + proposeTimeOptions().join('\n') + link;
+  }
+
+  // "Tuesday, 22 August" when 22 August is a Wednesday.
+  function findWeekdayMismatch(text, now = new Date()) {
+    const DAY = '(monday|tuesday|wednesday|thursday|friday|saturday|sunday)';
+    const ORD = '(\\d{1,2})(?:st|nd|rd|th)?';
+    const patterns = [
+      new RegExp('\\b' + DAY + ',?\\s+(?:the\\s+)?' + ORD + '\\s+(?:of\\s+)?' + MONTH_RE + '\\b(?:,?\\s+(\\d{4}))?', 'i'),
+      new RegExp('\\b' + DAY + ',?\\s+' + MONTH_RE + '\\s+' + ORD + '\\b(?:,?\\s+(\\d{4}))?', 'i'),
+    ];
+    const t = ukParts(now);
+    for (let i = 0; i < patterns.length; i++) {
+      const m = String(text || '').match(patterns[i]);
+      if (!m) continue;
+      const stated = DOW.findIndex(x => x.toLowerCase() === m[1].toLowerCase());
+      const day = +(i === 0 ? m[2] : m[3]);
+      const mon = monthIndex(i === 0 ? m[3] : m[2]);
+      let year = m[4] ? +m[4] : t.y;
+      // No year given and the date is well in the past → they mean next year.
+      if (!m[4] && Date.UTC(year, mon, day) < Date.UTC(t.y, t.m, t.d) - 30 * 86400000) year++;
+      const actual = new Date(Date.UTC(year, mon, day)).getUTCDay();
+      if (actual === stated) return null;
+      // The stated weekday in that same week, for "did you mean…".
+      let alt = new Date(Date.UTC(year, mon, day + (stated - actual)));
+      if (alt.getTime() < Date.UTC(t.y, t.m, t.d)) alt = new Date(alt.getTime() + 7 * 86400000);
+      return {
+        stated: DOW[stated],
+        dateLabel: `${day} ${MONTHS[mon]}`,
+        actualLabel: ukDateLabel(year, mon, day),
+        altLabel: ukDateLabel(alt.getUTCFullYear(), alt.getUTCMonth(), alt.getUTCDate()),
+      };
+    }
+    return null;
+  }
+
+  // ─── Interview confirmation + automatic thank-you ───
+  const ZONES = { bst: 60, gmt: 0, utc: 0, cet: 60, cest: 120, eet: 120, eest: 180, est: -300, edt: -240, cst: -360, cdt: -300, pst: -480, pdt: -420, ist: 330 };
+
+  // US daylight saving: second Sunday of March to first Sunday of November.
+  function usDaylight(date) {
+    const y = date.getUTCFullYear();
+    const nthSunday = (mon, n) => {
+      const first = new Date(Date.UTC(y, mon, 1)).getUTCDay();
+      return Date.UTC(y, mon, 1 + ((7 - first) % 7) + (n - 1) * 7);
+    };
+    const t = date.getTime();
+    return t >= nthSunday(2, 2) && t < nthSunday(10, 1);
+  }
+
+  // Parse the interview time from a confirmation message.
+  // msgDate: the message's own UK date {y, m, d}, for "Tuesday" / "tomorrow".
+  function parseInterviewTime(text, msgDate) {
+    const s = String(text || '');
+    let y = msgDate.y, m = msgDate.m, d = msgDate.d, found = false;
+
+    const explicit = s.match(new RegExp('\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?' + MONTH_RE + '\\b(?:,?\\s+(\\d{4}))?', 'i'))
+      || s.match(new RegExp('\\b' + MONTH_RE + '\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4}))?', 'i'));
+    if (explicit) {
+      const dayFirst = /^\d/.test(explicit[1]);
+      d = +(dayFirst ? explicit[1] : explicit[2]);
+      m = monthIndex(dayFirst ? explicit[2] : explicit[1]);
+      y = explicit[3] ? +explicit[3] : msgDate.y;
+      if (!explicit[3] && Date.UTC(y, m, d) < Date.UTC(msgDate.y, msgDate.m, msgDate.d) - 30 * 86400000) y++;
+      found = true;
+    } else if (/\btomorrow\b/i.test(s)) {
+      const dt = new Date(Date.UTC(msgDate.y, msgDate.m, msgDate.d + 1));
+      y = dt.getUTCFullYear(); m = dt.getUTCMonth(); d = dt.getUTCDate(); found = true;
+    } else if (/\btoday\b/i.test(s)) {
+      found = true;
+    } else {
+      const wd = s.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+      if (wd) {
+        const target = DOW.findIndex(x => x.toLowerCase() === wd[1].toLowerCase());
+        const base = new Date(Date.UTC(msgDate.y, msgDate.m, msgDate.d));
+        const add = (target - base.getUTCDay() + 7) % 7;
+        const dt = new Date(Date.UTC(msgDate.y, msgDate.m, msgDate.d + add));
+        y = dt.getUTCFullYear(); m = dt.getUTCMonth(); d = dt.getUTCDate(); found = true;
+      }
+    }
+    if (!found) return null;
+
+    // Start time: "11:00", "2:30 pm", "11am", "at 11". A bare number only
+    // counts after "at"/"from", so "1 to 2 interviewers" isn't a time.
+    const to24 = (h, ap, bare) => {
+      h = +h;
+      if (/pm/i.test(ap || '') && h < 12) h += 12;
+      else if (/am/i.test(ap || '') && h === 12) h = 0;
+      else if (!ap && bare && h >= 1 && h <= 7) h += 12; // "at 3" in business hours = 15:00
+      return h;
+    };
+    const cand = /(?:\b(at|from|@)\s*)?\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?(?![\d:])/gi;
+    let start = null;
+    let c;
+    while ((c = cand.exec(s))) {
+      if (!(c[3] || c[4] || c[1])) continue;
+      if (+c[2] > 23 || (c[3] && +c[3] > 59)) continue;
+      start = { h: to24(c[2], c[4], !c[3] && !c[4]), min: +(c[3] || 0), end: cand.lastIndex, ap: c[4] };
+      break;
+    }
+    if (!start) return null;
+    const sh = start.h;
+    const smin = start.min;
+    let durationMin = 30;
+    const endM = s.slice(start.end).match(/^\s*(?:-|–|to|until|till)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+    if (endM) {
+      const eh = to24(endM[1], endM[3] || start.ap, !endM[2] && !endM[3] && !start.ap);
+      const diff = (eh * 60 + +(endM[2] || 0)) - (sh * 60 + smin);
+      if (diff > 0 && diff <= 8 * 60) durationMin = diff;
+    } else {
+      const dur = s.match(/\b(\d{1,3})\s*(?:-\s*)?min(?:ute)?s?\b/i) || s.match(/\b(an|one|1|two|2)\s*(?:-\s*)?hours?\b/i);
+      if (dur) durationMin = /min/i.test(dur[0]) ? +dur[1] : (/(two|2)/i.test(dur[1]) ? 120 : 60);
+    }
+
+    // Stated timezone, else UK time.
+    const zm = s.match(/\b(BST|GMT|UTC|CET|CEST|EET|EEST|EST|EDT|CST|CDT|PST|PDT)\b(?:\s*([+-]\d{1,2}))?/i);
+    let startAt;
+    let zoneLabel;
+    if (zm) {
+      // People write "CET"/"EST" all year; in summer they mean CEST/EDT.
+      const z = zm[1].toLowerCase();
+      const probe = new Date(Date.UTC(y, m, d, 12));
+      let off = ZONES[z] + (zm[2] ? +zm[2] * 60 : 0);
+      if ((z === 'cet' || z === 'eet') && londonOffsetMin(probe)) off += 60;
+      if (['est', 'cst', 'pst'].includes(z) && usDaylight(probe)) off += 60;
+      startAt = new Date(Date.UTC(y, m, d, sh, smin) - off * 60000);
+      zoneLabel = zm[1].toUpperCase();
+    } else {
+      startAt = ukInstant(y, m, d, sh, smin);
+      zoneLabel = ukLabel(startAt);
+    }
+    return { start: startAt, end: new Date(startAt.getTime() + durationMin * 60000), y, m, d, h: sh, min: smin, zoneLabel, explicitZone: !!zm };
+  }
+
+  const CONFIRM_CUE = /confirmed for your interview|your interview (?:is|has been) (?:scheduled|confirmed|booked|set)|interview (?:is|has been) (?:scheduled|confirmed|booked)|(?:confirm|confirming|confirmed) (?:your|the) interview|interview (?:invite|invitation|confirmation)|(?:zoom|teams|google meet|meet) (?:link|invite|invitation)|join (?:the )?(?:zoom|teams|meet)/i;
+
+  // The interview in this thread, if one was confirmed.
+  function findInterview(messages, now = new Date()) {
+    const today = ukParts(now);
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.isMe !== false || !/\binterview/i.test(msg.text) || !CONFIRM_CUE.test(msg.text)) continue;
+      const base = new Date(Date.UTC(today.y, today.m, today.d - (msg.day || 0)));
+      const when = parseInterviewTime(msg.text, { y: base.getUTCFullYear(), m: base.getUTCMonth(), d: base.getUTCDate() });
+      if (!when) continue;
+      const thanked = messages.slice(i + 1).some(x => x.isMe === true &&
+        /thank(?:s| you) for (?:the interview|your time|taking the time|speaking)|enjoyed (?:our|the) (?:conversation|chat|call)/i.test(x.text));
+      const role = (msg.text.match(/\b(?:for|about) the ((?:[A-Z][\w&/+.-]*\s?){1,6})\s(?:role|position|opening)\b/)
+        || msg.text.match(/\b((?:[A-Z][\w&/+.-]*\s){0,5}[A-Z][\w&/+.-]*) (?:role|position)\b/) || [])[1];
+      // Named interviewer: one other person named → them; otherwise the sender.
+      const named = [...msg.text.matchAll(/\b(?:with|interviewer(?:s)? (?:is|are|will be)?:?)\s+([A-Z][a-z]+)(?:\s+[A-Z][a-z]+)?/g)].map(x => x[1]);
+      const notNames = /^(teams|zoom|google|microsoft|meet|us|me|you|the|our|your|linkedin|hr|monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december)$/i;
+      const uniq = [...new Set(named)].filter(n => !notNames.test(n));
+      return {
+        when,
+        past: now.getTime() > when.end.getTime(),
+        thanked,
+        role: role ? role.trim() : '',
+        interviewer: uniq.length === 1 ? uniq[0] : '',
+      };
+    }
+    return null;
+  }
+
+  function buildInterviewThankYou(firstName, role, signOff) {
+    const about = role ? `the ${role} role and the team` : 'the role and the team';
+    return `Hi ${firstName},\n\nI just wanted to say thank you for the interview. I really enjoyed our conversation and learnt a lot about ${about}.\n\nI appreciate your time and insights.\n\nBest regards,\n${signOff}`;
+  }
+
+  // "11:00 CET (10:00 BST)" — make the UK equivalent explicit.
+  function quoteTime(when) {
+    const own = `${pad2(when.h)}:${pad2(when.min)} ${when.zoneLabel}`;
+    if (!when.explicitZone || /^(BST|GMT)$/.test(when.zoneLabel)) return `${pad2(when.h)}:${pad2(when.min)} ${ukLabel(when.start)}`;
+    const uk = ukParts(when.start);
+    return `${own} (${pad2(uk.h)}:${pad2(uk.min)} ${ukLabel(when.start)})`;
+  }
+
+  // ─── CV shortlisting ───
+  const SHORTLIST_ITEMS = [
+    ['rtw', /\b(nationality|citizenship|visa|right to work|work permit|sponsor(?:ship)?|eligible to work)\b/i],
+    ['notice', /\b(notice|start date|when (?:could|can|would) you (?:start|join)|availability to start|available to start)\b/i],
+    ['location', /\b(current location|where are you (?:based|located)|currently (?:based|located)|location)\b/i],
+    ['relocate', /\brelocat\w*/i],
+    ['salary', /\b(salary|daily rate|day rate|rate expectations?|compensation|expected (?:salary|rate|pay))\b/i],
+    ['interviewFormat', /\b(face[- ]to[- ]face|telephone|phone interview|video interview|interview format|in[- ]person)\b/i],
+    ['offers', /\b(other offers?|offers? in hand|interviews? in hand|other (?:processes|interviews)|in the pipeline)\b/i],
+    ['interviewAvailability', /\b(availability for (?:an? )?interview|available (?:for|to) (?:an? )?interview|interview availability)\b/i],
+  ];
+
+  function shortlistTopics(text) {
+    return SHORTLIST_ITEMS.filter(([, re]) => re.test(text)).map(([k]) => k);
+  }
+
+  function isShortlistRequest(text) {
+    return shortlistTopics(text).length >= 3 ||
+      /\bshortlist\w*|\b(?:the )?following (?:details|information|questions)|\bbelow (?:details|questions)|\bstandard (?:questions|details)\b/i.test(text);
+  }
+
+  // The full shortlisting answer, as a written reply in prose paragraphs.
+  function buildShortlistReply(d) {
+    const loc = d.location
+      ? (/^i\b/i.test(d.location) ? asSentence(d.location) : `I am currently located in ${d.location}.`)
+      : 'I am currently located in [insert current location].';
+    const p1 = [asSentence(d.rightToWork), `I am available to start after my notice period of ${d.notice || '[notice period]'}.`, loc].join(' ');
+    const p2 = [asSentence(d.relocate), asSentence(d.relocateContract), d.salary ? `My expected salary is ${d.salary}.` : '']
+      .filter(Boolean).join(' ');
+    const p3 = [asSentence(d.interviewFormat), asSentence(d.interviewAvailability), asSentence(d.offers)].filter(Boolean).join(' ');
+    return ['Thanks for getting in touch. Please see my details below.', p1, p2, p3].filter(Boolean).join('\n\n');
+  }
+
+  // ─── British English ───
+  const BRITISH = [
+    [/\b(organi|personali|reali|recogni|priori|apologi|speciali|summari|finali|customi|minimi|maximi|utili|categori|emphasi|familiari|criti|memori|standardi)z(e|es|ed|ing|ation|ations)\b/gi, '$1s$2'],
+    [/\banalyz(e|es|ed|ing)\b/gi, 'analys$1'],
+    [/\b(col|fav|behavi|hon|lab|neighb|hum|flav)or(s|ed|ing|ite|ites|al)?\b/gi, '$1our$2'],
+    [/\bcenter(s|ed)?\b/gi, 'centre$1'],
+    [/\binquir(y|ies)\b/gi, 'enquir$1'],
+    [/\blearned\b/gi, 'learnt'],
+    [/\bcancel(ed|ing)\b/gi, 'cancell$1'],
+    [/\btravel(ed|ing|er)\b/gi, 'travell$1'],
+    [/\bfulfill\b/gi, 'fulfil'],
+    [/\benroll\b/gi, 'enrol'],
+    [/\bgray\b/gi, 'grey'],
+    // "while" as a conjunction → "whilst" (not "a while", "worth your while")
+    [/(^|[^\w])(?<!\b(?:a|your|the|for a|in a|after a|quite a|little)\s)while\b/gi, '$1whilst'],
+  ];
+  function britishise(text) {
+    // Links and email addresses are left exactly as they are.
+    return String(text || '').split(/(https?:\/\/\S+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)/).map((part, i) => {
+      if (i % 2) return part;
+      let out = part;
+      for (const [re, rep] of BRITISH) {
+        out = out.replace(re, (...m) => {
+          const matched = m[0];
+          const res = matched.replace(re, rep);
+          // Keep a capital on the word itself ("While" → "Whilst").
+          const first = matched.search(/[a-z]/i);
+          if (first >= 0 && matched[first] === matched[first].toUpperCase()) {
+            const at = res.search(/[a-z]/i);
+            return res.slice(0, at) + res.charAt(at).toUpperCase() + res.slice(at + 1);
+          }
+          return res;
+        });
+      }
+      return out;
+    }).join('');
+  }
+
+  // ─── Sign-off: "Maxmilliam", or "Best/Kind regards," when they're formal ───
+  function signOffFor(ctx, d) {
+    const name = d.signOffName || 'Maxmilliam';
+    const theirs = (ctx.lastMessage && ctx.lastMessage.text) || '';
+    const formal = theirs.match(/\b(kind|best|warm) regards\b|\bregards,|\byours sincerely\b/i);
+    if (!formal) return name;
+    const word = /kind/i.test(formal[0]) ? 'Kind' : 'Best';
+    return `${word} regards,\n${name}`;
+  }
+
+  // ─── Messages that need no reply ───
+  function isAutomated(text) {
+    return /\b(this is an automated|automated message|do not reply|no-?reply|unsubscribe|sponsored message)\b/i.test(String(text || ''));
+  }
+
+  // ─── Language check (templates write English only) ───
+  const LANG_HINTS = {
+    German: /\b(und|nicht|ich|sie|mit|für|wir|ist|danke|vielen|gerne|bitte|herzliche|grüße)\b/gi,
+    French: /\b(je|vous|nous|est|pour|avec|merci|bonjour|cordialement|votre|poste)\b/gi,
+    Spanish: /\b(que|para|con|usted|gracias|hola|saludos|puesto|tienes|estoy)\b/gi,
+    Dutch: /\b(het|een|ik|niet|met|voor|bedankt|groeten|graag|jij|jouw)\b/gi,
+    Italian: /\b(che|per|grazie|ciao|sono|della|lavoro|saluti|posizione)\b/gi,
+    Portuguese: /\b(você|obrigado|obrigada|olá|não|para|vaga|trabalho)\b/gi,
+    Polish: /\b(nie|się|jest|dziękuję|dzień dobry|pozdrawiam|praca|stanowisko)\b/gi,
+  };
+  function detectNonEnglish(text) {
+    const t = String(text || '');
+    const words = t.split(/\s+/).filter(Boolean).length;
+    if (words < 4) return '';
+    const english = (t.match(/\b(the|and|you|your|for|with|are|is|to|of|thanks|hi|would|could|we|our)\b/gi) || []).length;
+    let best = '', score = 0;
+    for (const [lang, re] of Object.entries(LANG_HINTS)) {
+      const n = (t.match(re) || []).length;
+      if (n > score) { score = n; best = lang; }
+    }
+    return score >= 2 && score > english ? best : '';
   }
 
   function buildColdOutreach(name, tone, goal, profile, ctx) {
@@ -1943,9 +2377,10 @@
     }
     // "When are you free?" → answer it.
     if (t.includes('meeting')) {
-      return casual
-        ? `Sure. I'm pretty flexible this week, send over a time that suits and I'll make it work.`
-        : `Happy to. I'm fairly flexible this week, so just let me know a time that suits and I'll make it work.`;
+      const link = (ctx.details || {}).calendarLink;
+      return link
+        ? `Happy to. Here is my booking link, feel free to pick any slot that suits: ${link}`
+        : timeOptionsText(ctx.details || {});
     }
     // "How much is it?" → the pricing reply, sized to the question.
     if (t.includes('pricing')) {
@@ -1960,17 +2395,11 @@
         : `I'm open to hearing more. Could you share a bit about the role and what the team is working on at the moment?`;
     }
 
-    // Anything else: we can't know the answer, so don't pretend. Leave a
-    // clear blank with their question (Insert & Send won't send it until
-    // it's filled), plus a call offer when the goal is a meeting.
-    const qs = ((raw.match(/[^.!?\n]*\?/g)) || []).map(q => q.replace(/\s+/g, ' ').trim()).filter(q => q.length > 3);
-    const q = qs.length ? qs[qs.length - 1] : '';
-    const short = q.length > 70 ? q.slice(0, 67).trim() + '…' : q;
-    let body = short ? `[Your answer to: ${short}]` : '[Your answer]';
-    if (/meeting|call/i.test(goal || '') && ctx.style !== 'direct') {
-      body += "\n\nHappy to go into more detail on a quick call if that's easier.";
-    }
-    return body;
+    // Anything else: we can't know the answer, so politely defer rather
+    // than invent one.
+    return ctx.style === 'direct'
+      ? "Happy to go into that on a call."
+      : "Good to go into that properly. Happy to cover it on a call if that works for you.";
   }
 
   function buildObjectionReply(ctx, tone, goal) {
@@ -2304,20 +2733,26 @@
       '| messages:', conversation.messages.map(m => `${m.isMe ? 'me' : m.isMe === false ? 'them' : '?'}:${m.text.length}ch`).join(' '));
     const meta = {};
     const reply = generateResponse(profile, conversation, { tone: currentTone, details, meta });
+    if (meta.noReply) {
+      showDMToast('No reply needed: this looks like an automated message.', 'success');
+      return { reply: '', conversation, composer, meta };
+    }
     insertIntoMessageBox(reply, scope, composer);
     if (composer) {
-      lastDrafts.set(composer, { text: reply, partner: conversation.partnerName, tooSoon: meta.tooSoon, daysAgo: meta.lastMineDaysAgo });
+      lastDrafts.set(composer, { text: reply, partner: conversation.partnerName, tooSoon: meta.tooSoon, daysAgo: meta.lastMineDaysAgo, language: meta.language });
     }
 
     const gaps = findPlaceholders(reply);
-    if (meta.tooSoon) {
+    if (meta.language) {
+      showDMToast(`${firstNameOf(conversation.partnerName) || 'They'} wrote in ${meta.language}. This draft is in English, so translate it before sending.`, 'error');
+    } else if (meta.tooSoon) {
       showDMToast(`You messaged ${firstNameOf(conversation.partnerName) || 'them'} ${whenLabel(meta.lastMineDaysAgo)} — give it a few days before sending a follow-up.`, 'error');
     } else if (!conversation.messages.length) {
       showDMToast("Couldn't read this chat's messages, so this is a first-message draft.", 'error');
     } else if (gaps.length) {
       showDMToast(`Fill in ${gaps.join(', ')} — or save it once in My details (right-click AI Reply).`, 'error');
     }
-    return { reply, conversation, composer };
+    return { reply, conversation, composer, meta };
   }
 
   function setBusy(btn, busy, label) {
@@ -2415,7 +2850,9 @@
       const reviewed = prev && prev.partner === partner && norm(readText(composer));
       if (!reviewed) {
         setBusy(aiBtn, true, 'Drafting...');
-        try { await draftInto(sendBtn); } finally { setBusy(aiBtn, false); }
+        let res;
+        try { res = await draftInto(sendBtn); } finally { setBusy(aiBtn, false); }
+        if (res && res.meta && res.meta.noReply) return;
       }
 
       const text = readText(composer);
@@ -2426,6 +2863,11 @@
         return;
       }
       const entry = lastDrafts.get(composer);
+      if (entry && entry.language) {
+        showDMToast(`Not sent: they wrote in ${entry.language}. Translate the draft, then press Send.`, 'error');
+        composer.focus();
+        return;
+      }
       if (entry && entry.tooSoon) {
         showDMToast(`Not sent: you already messaged them ${whenLabel(entry.daysAgo)}. A follow-up this soon can feel pushy — press Send yourself if you're sure.`, 'error');
         composer.focus();
@@ -3084,6 +3526,274 @@
     for (const sr of shadowRoots) observer.observe(sr, { childList: true, subtree: true });
   }
 
+  // ═══════════════════════════════════════════
+  //  GMAIL — AI Reply in reply windows
+  //  Same engine, email channel: sign-off, no-reply detection, and the
+  //  interview thank-you drafted automatically when Reply opens.
+  // ═══════════════════════════════════════════
+  const GMAIL_UNIT_ATTR = 'data-outreach-gmail-unit';
+  const GMAIL_BODY_SEL = 'div[contenteditable="true"][g_editable="true"], div[contenteditable="true"][aria-label="Message Body"], div[contenteditable="true"][aria-label="Message body"]';
+  const gmailSeen = new WeakSet();       // compose bodies already offered an auto-draft
+  const gmailDrafts = new WeakMap();     // body → our last draft text
+
+  function gmailMyEmail() {
+    const acct = document.querySelector('a[aria-label^="Google Account"], a[aria-label*="Google Account:"]');
+    const m = acct && (acct.getAttribute('aria-label') || '').match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/);
+    return (m ? m[0] : DEFAULT_DETAILS.email).toLowerCase();
+  }
+
+  function gmailSendFor(body) {
+    let cur = body.parentElement;
+    for (let i = 0; cur && i < 14; i++, cur = cur.parentElement) {
+      const b = cur.querySelector('div[role="button"][data-tooltip^="Send"], div[role="button"][aria-label^="Send"]');
+      if (b) return { send: b, unit: cur };
+    }
+    return null;
+  }
+
+  // "Thu, 24 Sept 2026, 10:15" / "Sep 24, 2026, 10:15 AM" → Date (UK time)
+  function gmailParseDate(label) {
+    const s = String(label || '');
+    const T = '(\\d{1,2}):(\\d{2})\\s*(am|pm)?';
+    let m = s.match(new RegExp('(\\d{1,2})\\s+' + MONTH_RE + '\\w*\\.?\\s+(\\d{4}),?\\s*(?:at\\s+)?' + T, 'i'));
+    let day, mon, year, h, min, ap;
+    if (m) { [, day, mon, year, h, min, ap] = m; } else {
+      m = s.match(new RegExp(MONTH_RE + '\\w*\\.?\\s+(\\d{1,2}),?\\s+(\\d{4}),?\\s*(?:at\\s+)?' + T, 'i'));
+      if (!m) return null;
+      [, mon, day, year, h, min, ap] = m;
+    }
+    h = +h;
+    if (/pm/i.test(ap || '') && h < 12) h += 12;
+    if (/am/i.test(ap || '') && h === 12) h = 0;
+    return ukInstant(+year, monthIndex(mon), +day, h, +min);
+  }
+
+  function ukDaysAgo(date) {
+    const a = ukParts(date);
+    const b = ukParts(new Date());
+    return Math.round((Date.UTC(b.y, b.m, b.d) - Date.UTC(a.y, a.m, a.d)) / 86400000);
+  }
+
+  // Drop quoted history ("On … wrote:", "> …", Outlook headers) and signatures.
+  function stripQuoted(text) {
+    const lines = String(text || '').split('\n');
+    const out = [];
+    for (const line of lines) {
+      if (/^On .{3,200}wrote:\s*$/.test(line) || /^-{2,}\s*Original Message/i.test(line) || /^From:\s.+/.test(line) && out.length) break;
+      if (/^--\s*$/.test(line)) break;
+      if (/^>/.test(line)) continue;
+      out.push(line);
+    }
+    return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  // The open thread in the same shape the LinkedIn scraper returns.
+  function gmailConversation() {
+    const main = document.querySelector('div[role="main"]') || document.body;
+    const me = gmailMyEmail();
+    const messages = [];
+    main.querySelectorAll('div.adn').forEach(el => {
+      const from = el.querySelector('span.gD');
+      if (!from) return;
+      const email = (from.getAttribute('email') || '').toLowerCase();
+      const dateEl = el.querySelector('span.g3');
+      const when = dateEl ? gmailParseDate(dateEl.getAttribute('title') || readText(dateEl)) : null;
+      const bodyEl = el.querySelector('div.a3s');
+      const text = stripQuoted(readText(bodyEl || el.querySelector('span.y2')));
+      if (!text) return;
+      messages.push({
+        text,
+        sender: cleanPersonName(from.getAttribute('name') || readText(from)),
+        email,
+        isMe: email ? email === me : null,
+        day: when ? ukDaysAgo(when) : null,
+      });
+    });
+
+    const mine = messages.filter(m => m.isMe === true);
+    const lastFromMe = messages.length > 0 && messages[messages.length - 1].isMe === true;
+    let end = messages.length - 1;
+    while (end >= 0 && messages[end].isMe !== false) end--;
+    let lastMessage = null;
+    let partner = null;
+    if (end >= 0) {
+      let start = end;
+      while (start > 0 && messages[start - 1].isMe === false) start--;
+      const run = messages.slice(start, end + 1);
+      partner = run[run.length - 1];
+      lastMessage = { text: run.map(m => m.text).join('\n'), sender: partner.sender, isMe: false };
+    }
+    const partnerEmail = partner ? partner.email : '';
+    return {
+      messages: messages.slice(-10),
+      lastMessage,
+      partnerName: partner && looksLikeRealName(partner.sender) && !/@/.test(partner.sender) ? partner.sender : 'there',
+      partnerEmail,
+      noReplySender: /(^|[.+_-])(no-?reply|do-?not-?reply|notifications?|mailer-daemon|newsletters?|news|updates|marketing)@/i.test(partnerEmail),
+      partnerCompany: '',
+      partnerHeadline: '',
+      partnerDegree: '',
+      partnerReplied: messages.some(m => m.isMe === false),
+      myCount: mine.length,
+      lastMineDaysAgo: mine.length ? (mine[mine.length - 1].day ?? null) : null,
+      lastFromMe,
+      myOpener: mine.length ? mine[0].text : '',
+      myLatest: mine.length ? mine[mine.length - 1].text : '',
+      myMessagesText: mine.map(m => m.text).join('\n'),
+      subject: readText(document.querySelector('h2.hP')),
+    };
+  }
+
+  // Put the draft above Gmail's signature / quoted text, never over it.
+  function gmailInsert(body, text) {
+    body.querySelectorAll('.outreach-dm-draft').forEach(n => n.remove());
+    const wrap = document.createElement('div');
+    wrap.className = 'outreach-dm-draft';
+    for (const line of text.split('\n')) {
+      const div = document.createElement('div');
+      if (line.trim()) div.textContent = line;
+      else div.appendChild(document.createElement('br'));
+      wrap.appendChild(div);
+    }
+    const rest = [...body.childNodes].some(n => (n.textContent || '').trim() || (n.querySelector && n.querySelector('img')));
+    if (rest) {
+      const gap = document.createElement('div');
+      gap.appendChild(document.createElement('br'));
+      wrap.appendChild(gap);
+    }
+    body.prepend(wrap);
+    body.focus();
+    const sel = window.getSelection();
+    const r = document.createRange();
+    r.selectNodeContents(wrap.lastChild && rest ? wrap.children[wrap.children.length - 2] || wrap : wrap);
+    r.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    body.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+    gmailDrafts.set(body, text);
+  }
+
+  function gmailBodyText(body) {
+    const clone = body.cloneNode(true);
+    clone.querySelectorAll('.gmail_signature, .gmail_quote, .gmail_extra, [data-smartmail]').forEach(n => n.remove());
+    return norm(clone.textContent);
+  }
+
+  // Draft for the compose window `btn` belongs to. auto: only the thank-you.
+  async function gmailDraft(body, { auto = false } = {}) {
+    const conv = gmailConversation();
+    if (!conv.messages.length) {
+      if (!auto) showDMToast('Open an email thread and click Reply to draft a reply.', 'error');
+      return null;
+    }
+    const profile = await getActiveProfile();
+    const details = await getMyDetails(conv);
+    const meta = {};
+    const reply = generateResponse(profile, conv, { tone: currentTone, details, meta, channel: 'email' });
+    if (auto && meta.intent !== 'thankyou') return meta;
+    if (meta.noReply || !reply) {
+      if (!auto) showDMToast(conv.lastFromMe ? 'No reply needed: you sent the last email.' : 'No reply needed: this looks like an automated email.', 'success');
+      return meta;
+    }
+    gmailInsert(body, reply);
+    const gaps = findPlaceholders(reply);
+    if (meta.language) showDMToast(`${firstNameOf(conv.partnerName) || 'They'} wrote in ${meta.language}. This draft is in English, so translate it before sending.`, 'error');
+    else if (gaps.length) showDMToast(`Fill in ${gaps.join(', ')} before sending.`, 'error');
+    else if (meta.intent === 'thankyou') showDMToast('Drafted your interview thank-you. Review it, then press Send.', 'success');
+    return meta;
+  }
+
+  function createGmailControls(body) {
+    const group = document.createElement('span');
+    group.className = CONTROLS_CLASS;
+    group.style.marginLeft = '8px';
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = AI_BTN_CLASS;
+    btn.innerHTML = '<span style="display:inline-flex">✨</span><span>AI Reply</span>';
+    btn.title = 'Draft a reply to this email thread';
+    btn.addEventListener('click', async e => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (btn.dataset.busy === '1') return;
+      setBusy(btn, true, 'Drafting...');
+      try { await gmailDraft(body); } catch (err) {
+        console.error('[OutreachPro Gmail] Draft error:', err);
+        showDMToast('Could not generate reply. Try again.', 'error');
+      } finally { setBusy(btn, false); }
+    });
+
+    const select = document.createElement('select');
+    select.className = TONE_SELECT_CLASS;
+    select.title = 'Reply tone';
+    for (const [value, label] of Object.entries(TONES)) {
+      const o = document.createElement('option');
+      o.value = value;
+      o.textContent = label;
+      select.appendChild(o);
+    }
+    select.value = currentTone;
+    ['click', 'mousedown', 'keydown'].forEach(ev => select.addEventListener(ev, e => e.stopPropagation()));
+    select.addEventListener('change', async () => {
+      currentTone = TONES[select.value] ? select.value : 'professional';
+      storageSet({ [TONE_KEY]: currentTone });
+      document.querySelectorAll('select.' + TONE_SELECT_CLASS).forEach(s => { s.value = currentTone; });
+      // Redo our draft in the new tone unless it has been edited.
+      const draft = body.querySelector('.outreach-dm-draft');
+      if (draft && norm(draft.textContent) === norm((gmailDrafts.get(body) || '').replace(/\n/g, ' '))) {
+        btn.click();
+      } else {
+        showDMToast(`Tone: ${TONES[currentTone]}`, 'success');
+      }
+    });
+
+    group.append(btn, select);
+    return group;
+  }
+
+  function gmailInject() {
+    for (const body of document.querySelectorAll(GMAIL_BODY_SEL)) {
+      if (!isVisible(body)) continue;
+      const found = gmailSendFor(body);
+      if (!found) continue;
+      const { send, unit } = found;
+      if (!unit.querySelector('.' + CONTROLS_CLASS)) {
+        unit.setAttribute(GMAIL_UNIT_ATTR, '1');
+        const group = createGmailControls(body);
+        const td = send.closest('td');
+        if (td && td.parentElement && td.parentElement.tagName === 'TR') {
+          const cell = document.createElement('td');
+          cell.appendChild(group);
+          td.after(cell);
+        } else {
+          (send.parentElement || send).after(group);
+        }
+      }
+      // A reply window just opened on a thread whose interview is over →
+      // draft the thank-you straight away (only into an empty reply).
+      const isReply = !!document.querySelector('h2.hP') && !(unit.querySelector('input[name="subjectbox"]') && isVisible(unit.querySelector('input[name="subjectbox"]')));
+      if (isReply && !gmailSeen.has(body)) {
+        gmailSeen.add(body);
+        if (!gmailBodyText(body)) gmailDraft(body, { auto: true }).catch(() => {});
+      }
+    }
+  }
+
+  function initGmail() {
+    if (window.__outreachDmInit) return;
+    window.__outreachDmInit = true;
+    injectDMStyles();
+    loadTone().then(t => document.querySelectorAll('select.' + TONE_SELECT_CLASS).forEach(s => { s.value = t; }));
+    let timer = null;
+    new MutationObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(gmailInject, 300);
+    }).observe(document.body, { childList: true, subtree: true });
+    setTimeout(gmailInject, 300);
+    setInterval(gmailInject, 2500);
+  }
+
   // The top LinkedIn window, when this frame may read it (same origin).
   function topWindow() {
     try {
@@ -3100,6 +3810,10 @@
     // own, so check the top window's.
     const top = topWindow();
     const host = location.hostname || (top ? top.location.hostname : '');
+    if (host === 'mail.google.com') {
+      if (window === window.top) initGmail();
+      return;
+    }
     if (!host.includes('linkedin.com')) return;
     // Guard against a second init in the same frame.
     if (window.__outreachDmInit) return;
