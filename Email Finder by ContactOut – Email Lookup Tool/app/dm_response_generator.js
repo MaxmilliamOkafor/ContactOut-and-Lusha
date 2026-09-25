@@ -185,6 +185,28 @@
         letter-spacing: 0.01em;
         -webkit-font-smoothing: antialiased;
       }
+      .outreach-dm-controls {
+        display: inline-flex; align-items: center; gap: 4px;
+        margin-right: 6px; vertical-align: middle; flex-shrink: 0;
+      }
+      .outreach-dm-controls.floating {
+        position: fixed !important; bottom: 80px !important; right: 30px !important;
+        z-index: 2147483640 !important;
+      }
+      .outreach-dm-tone {
+        height: 28px; border-radius: 14px; padding: 0 6px;
+        border: 1px solid rgba(99, 102, 241, 0.55); background: transparent;
+        color: inherit; font: 600 11px 'Inter', sans-serif; cursor: pointer;
+      }
+      .outreach-dm-tone option { color: #111; background: #fff; }
+      .outreach-dm-send {
+        width: 28px; height: 28px; border-radius: 50%; border: none;
+        background: linear-gradient(135deg, #10B981, #059669); color: #fff;
+        font-size: 12px; cursor: pointer; line-height: 28px; padding: 0;
+        box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
+      }
+      .outreach-dm-send:hover { filter: brightness(1.1); }
+      .outreach-dm-send:disabled { opacity: 0.6; cursor: default; }
       .${AI_BTN_CLASS}:hover {
         transform: translateY(-1px) scale(1.04);
         box-shadow: 0 4px 18px rgba(99, 102, 241, 0.5);
@@ -511,6 +533,77 @@
     return profiles.find(p => p.id === savedId) || profiles[0];
   }
 
+  // ─── My details: facts used to answer questions accurately ───
+  const DETAILS_KEY = 'outreach_dm_my_details';        // typed by the user
+  const AUTO_DETAILS_KEY = 'outreach_dm_my_details_auto'; // found in my messages
+  const DETAIL_FIELDS = [
+    ['cvLink', 'CV / resume link', 'https://…'],
+    ['calendarLink', 'Booking link', 'https://linke.to/Schedule'],
+    ['email', 'Email', 'you@example.com'],
+    ['phone', 'Phone', '+44 …'],
+    ['signOffName', 'Sign-off name', 'Maxmilliam'],
+    ['currentRole', 'Current role', 'Senior Backend Engineer'],
+    ['lookingFor', "What I'm looking for", 'Backend or Platform Engineering roles in Europe'],
+    ['rightToWork', 'Nationality / visa status', 'I am an EU citizen. No visa is required for my employment.'],
+    ['notice', 'Notice period', 'one month'],
+    ['location', 'Current location', 'London'],
+    ['relocate', 'Willing to relocate', 'Yes, I am willing to relocate.'],
+    ['relocateContract', 'Relocate for a contract role', 'Yes, I am willing to relocate for a contract role.'],
+    ['salary', 'Expected salary / daily rate', '£60,000 GBP'],
+    ['interviewFormat', 'Interview format', 'Yes, I am happy to attend both face-to-face and telephone interviews.'],
+    ['offers', 'Offers or interviews in hand', 'I currently do not have any other offers or interviews in hand.'],
+    ['interviewAvailability', 'Availability for interview', 'I am available to attend interviews at your convenience after my notice period.'],
+  ];
+
+  // Maxmilliam's standing answers. Anything typed in "My details" wins;
+  // current location is deliberately left for him to fill in.
+  const DEFAULT_DETAILS = {
+    email: 'maxokafordev@gmail.com',
+    calendarLink: 'https://linke.to/Schedule',
+    signOffName: 'Maxmilliam',
+    rightToWork: 'I am an EU citizen. No visa is required for my employment.',
+    notice: 'one month',
+    relocate: 'Yes, I am willing to relocate.',
+    relocateContract: 'Yes, I am willing to relocate for a contract role.',
+    salary: '£60,000 GBP',
+    interviewFormat: 'Yes, I am happy to attend both face-to-face and telephone interviews.',
+    offers: 'I currently do not have any other offers or interviews in hand.',
+    interviewAvailability: 'I am available to attend interviews at your convenience after my notice period.',
+  };
+
+  function storageGet(key) {
+    return new Promise(resolve => {
+      try { chrome.storage.local.get(key, r => resolve((r && r[key]) || null)); } catch (e) { resolve(null); }
+    });
+  }
+  function storageSet(obj) {
+    try { chrome.storage.local.set(obj); } catch (e) { /* ignore */ }
+  }
+
+  // Typed details win; then anything found earlier in my messages; then
+  // what's in this conversation. Newly found values are remembered.
+  async function getMyDetails(conversation) {
+    const manual = (await storageGet(DETAILS_KEY)) || {};
+    const auto = (await storageGet(AUTO_DETAILS_KEY)) || {};
+    const found = extractDetailsFromText(conversation ? conversation.myMessagesText : '');
+    const merged = { ...auto };
+    let changed = false;
+    for (const [k, v] of Object.entries(found)) {
+      if (v && auto[k] !== v) { merged[k] = v; changed = true; }
+    }
+    if (changed) storageSet({ [AUTO_DETAILS_KEY]: merged });
+    const out = { ...DEFAULT_DETAILS, ...merged };
+    for (const [k, v] of Object.entries(manual)) if (v && String(v).trim()) out[k] = String(v).trim();
+    return out;
+  }
+
+  let currentTone = 'professional';
+  async function loadTone() {
+    const t = await storageGet(TONE_KEY);
+    if (t && TONES[t]) currentTone = t;
+    return currentTone;
+  }
+
   async function saveProfiles(profiles) {
     return new Promise(resolve => {
       chrome.storage.local.set({ [TRAINING_KEY]: profiles }, resolve);
@@ -536,7 +629,7 @@
   }
 
   function isSendButton(b) {
-    if (!b || b.classList.contains(AI_BTN_CLASS)) return false;
+    if (!b || b.classList.contains(AI_BTN_CLASS) || b.closest('.outreach-dm-controls')) return false;
     const label = (b.getAttribute('aria-label') || '').trim();
     const text = (b.innerText || b.textContent || '').trim();
     return /^send( message| reply)?$/i.test(text) || /^send( message| reply)?$/i.test(label);
@@ -605,28 +698,60 @@
   // time on two lines, or LinkedIn's screen-reader "… sent the following
   // message at 2:16 PM") — and date headings like "SEP 15" / "TODAY"
   // separate days.
+  // Day headings LinkedIn puts between messages.
+  const DATE_HEADING_RE = /^(today|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun|(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(,?\s+\d{4})?)$/i;
+
+  // "TODAY" → 0, "YESTERDAY" → 1, "Monday" → days since, "SEP 24" → days since.
+  function daysAgoFromLabel(label) {
+    const t = String(label || '').trim().toLowerCase();
+    if (!DATE_HEADING_RE.test(t)) return null;
+    if (t === 'today') return 0;
+    if (t === 'yesterday') return 1;
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const long = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    let wi = long.indexOf(t);
+    if (wi < 0) wi = long.findIndex(d => d.slice(0, 3) === t);
+    if (wi >= 0) {
+      const diff = (now.getDay() - wi + 7) % 7;
+      return diff === 0 ? 7 : diff;
+    }
+    const m = t.match(/^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?$/);
+    if (!m) return null;
+    const mon = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(m[1].slice(0, 3));
+    const year = m[3] ? +m[3] : now.getFullYear();
+    let d = new Date(year, mon, +m[2]);
+    if (!m[3] && d > startOfToday) d = new Date(year - 1, mon, +m[2]);
+    return Math.max(0, Math.round((startOfToday - d) / 86400000));
+  }
+
   function parseChatText(text) {
     const TIME = '\\d{1,2}:\\d{2}\\s?(?:[AaPp]\\.?[Mm]\\.?)?';
     const headerOneLine = new RegExp('^(.+?)(?:\\s*[•·]\\s*|\\s+sent the following messages? at\\s+|\\s+)(' + TIME + ')$', 'i');
     const timeOnly = new RegExp('^[•·]?\\s*' + TIME + '$', 'i');
-    const DATE_HEADING = /^(today|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun|(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(,?\s+\d{4})?)$/i;
+    const DATE_HEADING = DATE_HEADING_RE;
     const NOISE = /^(seen|sent|delivered|read)\b.*|^view .+ profile$|^(active now|online|typing\.*|send|gif|write a message…?|press enter to send\.?)$/i;
 
     const lines = text.split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
     const groups = [];
     let cur = null;
+    let day = null; // days ago, from the latest date heading
     const start = sender => {
       if (cur && !cur.lines.length) {
         if (sameName(cur.sender, sender)) return; // screen-reader + visible header
         groups.pop();
       }
-      cur = { sender, lines: [] };
+      cur = { sender, lines: [], day };
       groups.push(cur);
     };
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      if (DATE_HEADING.test(line) || NOISE.test(line)) continue;
+      if (DATE_HEADING.test(line)) {
+        day = daysAgoFromLabel(line);
+        continue;
+      }
+      if (NOISE.test(line)) continue;
 
       const m = line.match(headerOneLine);
       if (m && /[•·]|sent the following|[ap]\.?m\.?$/i.test(line) && nameLike(m[1])) {
@@ -647,7 +772,7 @@
       if (!cur.lines.length && sameName(line, cur.sender)) continue;
       cur.lines.push(line);
     }
-    return groups.filter(g => g.lines.length).map(g => ({ sender: g.sender, text: g.lines.join('\n') }));
+    return groups.filter(g => g.lines.length).map(g => ({ sender: g.sender, text: g.lines.join('\n'), day: g.day }));
   }
 
   // Visible text of an element. innerText keeps paragraph breaks
@@ -684,17 +809,22 @@
   // The signed-in user's name, from the global-nav avatar's alt text.
   function getMyName() {
     const strip = alt => cleanPersonName(String(alt || '').replace(/^(photo|picture|image) of\s+/i, ''));
-    const img = document.querySelector(
-      'img.global-nav__me-photo, .global-nav__me img, img[class*="global-nav__me-photo"]'
-    );
-    const direct = img && strip(img.getAttribute('alt'));
-    if (looksLikeRealName(direct)) return direct;
-    // Layouts without those classes: the avatar in the "Me" nav item.
-    for (const el of document.querySelectorAll('header a, header button, nav a, nav button')) {
-      if (!/^me\b/i.test((el.innerText || '').trim())) continue;
-      const av = el.querySelector('img[alt]');
-      const n = av && strip(av.getAttribute('alt'));
-      if (looksLikeRealName(n) && !/^me$/i.test(n)) return n;
+    // In the messaging iframe the nav bar is in the top document.
+    const top = topWindow();
+    const docs = top ? [document, top.document] : [document];
+    for (const doc of docs) {
+      const img = doc.querySelector(
+        'img.global-nav__me-photo, .global-nav__me img, img[class*="global-nav__me-photo"]'
+      );
+      const direct = img && strip(img.getAttribute('alt'));
+      if (looksLikeRealName(direct)) return direct;
+      // Layouts without those classes: the avatar in the "Me" nav item.
+      for (const el of doc.querySelectorAll('header a, header button, nav a, nav button')) {
+        if (!/^me\b/i.test((el.innerText || '').trim())) continue;
+        const av = el.querySelector('img[alt]');
+        const n = av && strip(av.getAttribute('alt'));
+        if (looksLikeRealName(n) && !/^me$/i.test(n)) return n;
+      }
     }
     return '';
   }
@@ -746,13 +876,19 @@
     // ─── Strategy 1: message groups. Only the first message of a group
     // carries the sender's name, so carry it forward to the rest. ───
     let currentSender = '';
+    let currentDay = null;
     root.querySelectorAll('li.msg-s-message-list__event').forEach(ev => {
+      // Day heading ("TODAY", "SEP 24") at the top of this event, if any.
+      for (const h of ev.querySelectorAll('.msg-s-message-list__time-heading, time')) {
+        const d = daysAgoFromLabel(readText(h));
+        if (d !== null) { currentDay = d; break; }
+      }
       const nameEl = ev.querySelector('.msg-s-message-group__name, .msg-s-message-group__profile-link');
       if (nameEl) currentSender = cleanPersonName(readText(nameEl));
       ev.querySelectorAll('.msg-s-event-listitem').forEach(item => {
         const text = readText(item.querySelector('.msg-s-event-listitem__body, .msg-s-event__content'));
         if (!text) return;
-        messages.push({ text, sender: currentSender || 'Unknown', isMe: whoIsIt(currentSender, item) });
+        messages.push({ text, sender: currentSender || 'Unknown', isMe: whoIsIt(currentSender, item), day: currentDay });
       });
     });
     if (messages.length) log('Scraper: grouped events', messages.length);
@@ -777,6 +913,8 @@
     let pane = null;
     let paneTitle = '';
     let paneCompany = '';
+    let paneDegree = '';
+    let paneHeadline = '';
     if (messages.length === 0 && composer && composer.isConnected) {
       pane = paneFor(composer);
       if (pane) {
@@ -794,12 +932,19 @@
         const intro = lines.slice(0, firstHeader > 0 ? firstHeader : 8);
         const co = intro.map(l => l.match(/(?:\s(?:at)\s|\s?@\s?)([^|,•·\n]{2,40})/i)).find(Boolean);
         if (co) paneCompany = co[1].trim().replace(/[.\s]+$/, '');
+        // Profile card: "Name (She/Her) · 1st" then their headline.
+        const degIdx = intro.findIndex(l => /[·•]\s*(1st|2nd|3rd\+?)\b/i.test(l));
+        if (degIdx >= 0) {
+          paneDegree = intro[degIdx].match(/[·•]\s*(1st|2nd|3rd\+?)\b/i)[1].toLowerCase();
+          const next = intro[degIdx + 1];
+          if (next && !nameLike(next) && !DATE_HEADING_RE.test(next)) paneHeadline = next;
+        }
 
         for (const g of parseChatText(text)) {
           let isMe = null;
           if (myName) isMe = sameName(g.sender, myName);
           else if (paneTitle) isMe = !sameName(g.sender, paneTitle);
-          messages.push({ text: g.text, sender: g.sender, isMe });
+          messages.push({ text: g.text, sender: g.sender, isMe, day: g.day });
         }
         if (messages.length) log('Scraper: visible-text reader', messages.length, 'title:', paneTitle);
       }
@@ -884,16 +1029,26 @@
       '.msg-overlay-bubble-header__subtitle',
       '.msg-s-profile-card .artdeco-entity-lockup__subtitle',
     ];
+    let partnerHeadline = paneHeadline;
     outerCo:
-    for (const container of (partnerCompany ? [] : containers)) {
+    for (const container of containers) {
       for (const sel of headlineSelectors) {
         const el = container.querySelector(sel);
-        const m = el && readText(el).split('\n')[0].match(/(?:\s(?:at)\s|\s?@\s?)([^|,•·\n]{2,40})/i);
-        if (m) {
-          partnerCompany = m[1].trim().replace(/[.\s]+$/, '');
-          break outerCo;
-        }
+        const line = el ? readText(el).split('\n')[0].trim() : '';
+        if (!line) continue;
+        if (!partnerHeadline) partnerHeadline = line;
+        const m = line.match(/(?:\s(?:at)\s|\s?@\s?)([^|,•·\n]{2,40})/i);
+        if (m && !partnerCompany) partnerCompany = m[1].trim().replace(/[.\s]+$/, '');
+        if (partnerCompany) break outerCo;
       }
+    }
+
+    // Connection degree ("· 1st") from this conversation's header/profile card.
+    let partnerDegree = paneDegree;
+    if (!partnerDegree && containers.length) {
+      const head = readText(containers[containers.length - 1]).slice(0, 1500);
+      const dm = head.match(/[·•]\s*(1st|2nd|3rd\+?)\b/i);
+      if (dm) partnerDegree = dm[1].toLowerCase();
     }
 
     // ─── Whose turn is it? ───
@@ -940,11 +1095,18 @@
     log('Scraped:', messages.length, 'messages; partner:', partnerName || '(unknown)',
       '; last from me:', lastFromMe);
 
+    const mineAll = messages.filter(m => m.isMe === true);
     return {
       messages: messages.slice(-10),
       lastMessage,
       partnerName: partnerName || 'there',
       partnerCompany,
+      partnerHeadline,
+      partnerDegree,
+      partnerReplied: messages.some(m => m.isMe === false),
+      myCount: mineAll.length,
+      // Days since my latest message (null if the date isn't shown).
+      lastMineDaysAgo: mineAll.length ? (mineAll[mineAll.length - 1].day ?? null) : null,
       lastFromMe,
       myOpener,
       myLatest,
@@ -973,9 +1135,56 @@
   // ═══════════════════════════════════════════
   function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
-  function generateResponse(profile, conversation) {
+  // Tones offered in the selector. Each maps onto the template banks
+  // (friendly = the warm bank; direct = professional, trimmed to the facts).
+  const TONES = { professional: 'Professional', friendly: 'Friendly', casual: 'Casual', direct: 'Direct' };
+  const TONE_KEY = 'outreach_dm_tone';
+
+  function bankFor(style, profile) {
+    if (!style) return (profile && profile.tone) || 'professional';
+    return { professional: 'professional', friendly: 'enthusiastic', casual: 'casual', direct: 'professional' }[style] || 'professional';
+  }
+
+  // Direct: keep the substance, drop the pleasantries.
+  function makeDirect(body) {
+    // ("Thanks for connecting" is the point of an accepted-invite message — keep it.)
+    const soft = /^(thanks(?! for connecting)|thank you(?! for connecting)|appreciate|looking forward|happy to share|let me know if|shout if|glad)/i;
+    const paras = body.split('\n\n')
+      .map(p => splitSentences(p).filter(s => !soft.test(s)).join(' '))
+      .filter(Boolean);
+    return paras.length ? paras.join('\n\n') : body;
+  }
+
+  // opts.tone: selector tone (overrides the profile's); opts.details: my
+  // details (CV link, notice period…) used to answer their questions.
+  // opts.channel: 'linkedin' (default) or 'email'.
+  function generateResponse(profile, conversation, opts = {}) {
+    const meta = opts.meta || {};
+    const channel = opts.channel === 'email' ? 'email' : 'linkedin';
+    const d = opts.details || {};
     const partnerName = firstNameOf(conversation.partnerName) || 'there';
-    const tone = profile ? profile.tone : 'professional';
+    const lastText = (conversation.lastMessage && conversation.lastMessage.text) || '';
+
+    // Nothing to answer: automated notifications, newsletters, no-reply senders.
+    if (!conversation.lastFromMe && (isAutomated(lastText) || conversation.noReplySender)) {
+      meta.noReply = true;
+      meta.intent = 'none';
+      return '';
+    }
+    // Templates write English only; flag other languages rather than
+    // replying in the wrong one.
+    meta.language = detectNonEnglish(lastText);
+
+    // Interview confirmed and now over, not yet thanked → the thank-you,
+    // exactly as specified (no tone or other additions).
+    const interview = findInterview(conversation.messages || []);
+    if (interview && interview.past && !interview.thanked) {
+      meta.intent = 'thankyou';
+      const who = interview.interviewer || partnerName;
+      return britishise(buildInterviewThankYou(who, interview.role, d.signOffName || 'Maxmilliam'));
+    }
+    const style = TONES[opts.tone] ? opts.tone : null;
+    const tone = bankFor(style, profile);
     const goal = profile ? profile.description : 'Continue the conversation naturally';
     const lastMsg = conversation.lastMessage;
     const allMessages = conversation.messages || [];
@@ -986,12 +1195,37 @@
     context.myOpener = conversation.myOpener || '';
     context.myLatest = conversation.myLatest || '';
     context.myMessagesText = conversation.myMessagesText || '';
+    context.details = d;
+    context.style = style;
+    context.channel = channel;
+    // Their latest turn confirms an upcoming interview → confirm it back.
+    if (interview && !interview.past && !conversation.lastFromMe && CONFIRM_CUE.test(lastText) && /\binterview/i.test(lastText)) {
+      context.lastIntent = 'interviewConfirmed';
+      context.interview = interview;
+    }
+    if (style === 'direct') context.matchLength = 's';
     // I sent the last message and they haven't replied: write a follow-up,
     // not a reply to their older message.
+    context.partnerHeadline = conversation.partnerHeadline || '';
     if (conversation.lastFromMe) {
-      context.lastIntent = 'awaiting';
+      // They accepted my invite (my note is the only message, they're now a
+      // 1st-degree connection, no reply yet): thank them and move forward —
+      // never "bump" someone who just said yes.
+      const accepted = !conversation.partnerReplied && conversation.partnerDegree === '1st' && conversation.myCount === 1;
+      context.lastIntent = accepted ? 'accepted' : 'awaiting';
       context.isFirstMessage = false;
+      // A follow-up within a couple of days of my last message reads as spam.
+      context.tooSoon = !accepted && conversation.lastMineDaysAgo !== null && conversation.lastMineDaysAgo < 3;
+      // By email, if I sent the last message recently there's nothing to reply to.
+      if (channel === 'email' && context.tooSoon) {
+        meta.noReply = true;
+        meta.intent = 'none';
+        return '';
+      }
     }
+    meta.intent = context.lastIntent;
+    meta.tooSoon = !!context.tooSoon;
+    meta.lastMineDaysAgo = conversation.lastMineDaysAgo;
 
     // ─── Build a reply based on what was actually said ───
     let reply = buildContextualReply(context, partnerName, tone, goal, profile);
@@ -1002,7 +1236,8 @@
     // ─── Final humanization pass (remove AI tells) ───
     reply = humanize(reply);
 
-    return reply;
+    // ─── British English throughout ───
+    return britishise(reply);
   }
 
   // Remove the common tells that make generated text feel AI-written:
@@ -1071,7 +1306,7 @@
     // Strip emoji clusters down to at most one per reply
     const emojiRe = /[\u2600-\u27BF\uE000-\uF8FF\u{1F000}-\u{1FFFF}]/gu;
     let emojiSeen = 0;
-    text = text.replace(emojiRe, (m) => (++emojiSeen > 1 ? '' : m));
+    text = text.replace(emojiRe, () => (++emojiSeen, '')); // plain text: no emojis
     // Collapse whitespace introduced by removals
     text = text.replace(/[ \t]{2,}/g, ' ');
     text = text.replace(/\n[ \t]+/g, '\n');
@@ -1193,6 +1428,8 @@
     const substantiveTopics = ['job', 'meeting', 'product', 'collaboration', 'pricing', 'experience'];
     const hasSubstantive = ctx.topics.some(t => substantiveTopics.includes(t));
 
+    // Everything they asked of me, in order (CV, notice period, …).
+    ctx.requests = detectRequests(lastMsg.text);
     // Did they propose a time? ("I'm free Tuesday at 11am…")
     ctx.proposedSlot = extractProposedSlot(lastMsg.text);
     // Are they offering to help? ("How can I assist you?")
@@ -1202,7 +1439,14 @@
     ctx.partnerSendsLink = /\bi(?:'ll| will| can)\s+(?:share|send)\b[^.!?]{0,40}\b(?:link|invite|invitation)\b/i.test(lastMsg.text);
     ctx.sharedDetails = /https?:\/\/|\bjob description\b|\battached\b|\bsharing\b/i.test(lastMsg.text);
 
-    if (ctx.proposedSlot) ctx.lastIntent = 'scheduling';
+    // They'll send / follow up themselves ("I'll email you the details").
+    ctx.theyWillSend = /(?:^|[.!?\n]\s*)(?:i|we)(?:'ll| will| can| shall)\s+(?:send|email|share|forward|get back|follow up|reach out|be in touch)\b/i.test(lastMsg.text);
+
+    // "Tuesday, 22 August" when 22 August is a Wednesday → flag it first.
+    ctx.mismatch = findWeekdayMismatch(lastMsg.text);
+
+    if (ctx.mismatch) ctx.lastIntent = 'mismatch';
+    else if (ctx.proposedSlot) ctx.lastIntent = 'scheduling';
     else if (ctx.topics.includes('rejection')) ctx.lastIntent = 'objection';
     else if (ctx.offersHelp) ctx.lastIntent = 'offer';
     else if (ctx.questions.length > 0) ctx.lastIntent = 'question';
@@ -1212,6 +1456,8 @@
     else if (ctx.topics.includes('gratitude')) ctx.lastIntent = 'thankful';
     else if (ctx.topics.includes('introduction')) ctx.lastIntent = 'greeting';
     else ctx.lastIntent = 'statement';
+    // A plain "I'll send it over" with nothing else asked of me.
+    if (ctx.theyWillSend && ['statement', 'thankful', 'greeting'].includes(ctx.lastIntent)) ctx.lastIntent = 'theyWillSend';
 
     // Sentiment
     const positiveWords = ['great', 'awesome', 'love', 'excited', 'happy', 'amazing', 'fantastic', 'good', 'wonderful', 'perfect', 'interested'];
@@ -1237,7 +1483,13 @@
       enthusiastic: [`Hi ${name},`, `Hey ${name},`],
       witty: [`Hey ${name},`, `Hi ${name},`],
     };
-    const greeting = pick(greetings[tone] || greetings.professional);
+    const styleGreetings = {
+      professional: [`Hi ${name},`, `Hello ${name},`],
+      friendly: [`Hi ${name}!`],
+      casual: [`Hey ${name},`],
+      direct: [`Hi ${name},`],
+    };
+    const greeting = pick((ctx.style && styleGreetings[ctx.style]) || greetings[tone] || greetings.professional);
 
     // If no conversation yet (cold outreach)
     if (ctx.isFirstMessage) {
@@ -1247,9 +1499,38 @@
     // Build reply based on detected intent
     let body = '';
 
-    switch (ctx.lastIntent) {
+    // They asked for specific things → answer each one (unless it's a no).
+    const answerable = (ctx.requests || []).filter(r => r.type !== 'cvReceived');
+    const keep = ['awaiting', 'objection', 'mismatch', 'interviewConfirmed', 'accepted'];
+    const intent = (!keep.includes(ctx.lastIntent) && (answerable.length || isShortlistRequest((ctx.lastMessage && ctx.lastMessage.text) || '')))
+      ? 'answer' : ctx.lastIntent;
+
+    switch (intent) {
+      case 'answer':
+        body = buildAnswerReply(ctx, ctx.style || 'professional');
+        break;
       case 'awaiting':
         body = buildNudgeReply(ctx, tone);
+        break;
+      case 'mismatch': {
+        const mm = ctx.mismatch;
+        const d = ctx.details || {};
+        body = `Just to flag, ${mm.dateLabel} is a ${mm.actualLabel.split(' ')[0]}, not a ${mm.stated}. Did you mean ${mm.actualLabel} or ${mm.altLabel}?\n\nIf neither suits, I could also do:\n${proposeTimeOptions().join('\n')}`
+          + (d.calendarLink ? `\n\nOr feel free to pick a slot here: ${d.calendarLink}` : '');
+        break;
+      }
+      case 'interviewConfirmed': {
+        const w = ctx.interview.when;
+        body = `Thanks for confirming. Looking forward to speaking on ${ukDateLabel(w.y, w.m, w.d)} at ${quoteTime(w)}.`;
+        break;
+      }
+      case 'accepted':
+        body = buildAcceptedReply(ctx, ctx.style || (tone === 'casual' ? 'casual' : 'professional'));
+        break;
+      case 'theyWillSend':
+        body = /get back|follow up|be in touch|reach out/i.test((ctx.lastMessage && ctx.lastMessage.text) || '')
+          ? (tone === 'casual' ? 'Sounds good, speak soon.' : 'Sounds good, thanks. Speak soon.')
+          : (tone === 'casual' ? "Sounds good, I'll keep an eye out for it." : "Sounds good, thanks. I'll keep an eye out for it.");
         break;
       case 'scheduling':
         body = buildSchedulingReply(ctx, tone);
@@ -1284,7 +1565,11 @@
       body = blendWithExampleStyle(body, profile, tone);
     }
 
-    return greeting + '\n\n' + body;
+    if (ctx.style === 'direct') body = makeDirect(body);
+    // Email gets a sign-off ("Maxmilliam", or "Best regards," when they're
+    // formal); LinkedIn chat doesn't.
+    const signOff = ctx.channel === 'email' ? '\n\n' + signOffFor(ctx, ctx.details || {}) : '';
+    return greeting + '\n\n' + body + signOff;
   }
 
   // Find a time the partner proposed: "Tuesday at 11am", "Wednesday before
@@ -1397,6 +1682,31 @@
     return replies[tone] || replies.professional;
   }
 
+  // "Leading EMEA&LATAM Strategy and Operations at LinkedIn" →
+  // "your work leading EMEA&LATAM Strategy and Operations at LinkedIn"
+  function headlinePhrase(headline, company) {
+    let h = String(headline || '').split(/\s[|•·]\s|\|/)[0].trim();
+    h = h.replace(/\s+(?:at|@)\s+.*$/i, '').trim();
+    if (!h || h.length > 70) return '';
+    const at = company ? ` at ${company}` : '';
+    if (/^[A-Za-z]+ing\b/.test(h)) return `your work ${h.charAt(0).toLowerCase() + h.slice(1)}${at}`;
+    return `your work as ${/^[aeiou]/i.test(h) ? 'an' : 'a'} ${h}${at}`;
+  }
+
+  // They accepted my connection request: thank them, say why, suggest a chat.
+  function buildAcceptedReply(ctx, style) {
+    const about = headlinePhrase(ctx.partnerHeadline, ctx.partnerCompany)
+      || (ctx.partnerCompany ? `what you're working on at ${ctx.partnerCompany}` : "what you're working on at the moment");
+    const purpose = outreachPurpose(ctx);
+    const replies = {
+      professional: `Thanks for connecting. I'd like to hear more about ${about} and see ${purpose}.\n\nWould you be open to a quick 15-minute call sometime in the next couple of weeks?`,
+      friendly: `Thanks for connecting, glad we did! I'd like to hear more about ${about} and see ${purpose}.\n\nWould a quick call sometime in the next couple of weeks work for you?`,
+      casual: `Thanks for connecting! Keen to hear more about ${about} and see ${purpose}. Up for a quick chat sometime?`,
+      direct: `Thanks for connecting. I'd like to hear more about ${about} and see ${purpose}. Open to a 15-minute call?`,
+    };
+    return replies[style] || replies.professional;
+  }
+
   // I sent the last message and haven't heard back.
   function buildNudgeReply(ctx, tone) {
     // Remind them what I'm after, in my own words, when I said it.
@@ -1412,14 +1722,593 @@
     }
     const replies = {
       professional: [
-        'Just following up on my note above in case it got buried. Would be good to connect if you have a moment this week.',
-        'Bumping this up in case it slipped through. No pressure either way, happy to connect whenever suits.',
+        'Just following up on my note above in case it got buried. Would be good to find a time to chat if you have a moment this week.',
+        'Bumping this up in case it slipped through. No pressure either way, happy to find a time whenever suits.',
       ],
       casual: ['Just bumping this in case it got buried. No pressure either way.'],
-      enthusiastic: ['Just following up on my note above in case it got buried. Would be good to connect when you have a moment.'],
+      enthusiastic: ['Just following up on my note above in case it got buried. Would be good to chat when you have a moment.'],
       witty: ['Bumping this up before it sinks below the recruiter spam. No pressure either way.'],
     };
     return pick(replies[tone] || replies.professional);
+  }
+
+  // ═══════════════════════════════════════════
+  //  ANSWER ENGINE — reply to what they actually asked
+  //  Every question / request in their latest turn gets its own answer, in
+  //  order, using the user's real details. Unknown facts are never made up:
+  //  we ask back, or leave a visible [placeholder] that blocks Insert & Send.
+  // ═══════════════════════════════════════════
+
+  // Facts about me pulled from my own past messages: links I've shared,
+  // my email, what I said I'm looking for.
+  function extractDetailsFromText(text) {
+    const d = {};
+    if (!text) return d;
+    const email = text.match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/);
+    if (email) d.email = email[0];
+    const URL_RE = /https?:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]+/;
+    for (const line of text.split('\n')) {
+      const url = line.match(URL_RE);
+      if (!url) continue;
+      const u = url[0].replace(/[.,;:!?)\]]+$/, '');
+      if (!d.cvLink && /\b(resume|résumé|cv|curriculum)\b/i.test(line + ' ' + u)) d.cvLink = u;
+      else if (!d.calendarLink && /(calendly|cal\.com|tidycal|schedul|book|let'?s chat|meeting|calendar)/i.test(line + ' ' + u)) d.calendarLink = u;
+    }
+    const phone = text.match(/(?:phone|mobile|tel|whatsapp|📞|📱)[:\s]*([+\d][\d\s().-]{7,}\d)/i);
+    if (phone) d.phone = phone[1].trim();
+    const role = text.match(/\bI(?:'m| am) an? ((?:[A-Z][\w+#/-]*\s){0,4}(?:Engineer|Developer|Architect|Manager|Designer|Scientist|Analyst|Consultant|Lead|Director|Specialist))\b/);
+    if (role) d.currentRole = role[1].trim();
+    const seeking = extractSeeking(text);
+    if (seeking) d.lookingFor = seeking;
+    const years = text.match(/\b(\d{1,2})\+?\s+years(?: of)?(?: [a-z]+)? experience/i);
+    if (years) d.years = years[1];
+    return d;
+  }
+
+  function splitSentences(text) {
+    return String(text || '')
+      .split(/\n+/)
+      .flatMap(line => line.split(/(?<=[.!?])\s+/))
+      .map(s => s.trim())
+      .filter(Boolean);
+  }
+
+  // A sentence that asks something of me (vs. one that just states a fact).
+  const ASK_CUE = /\?|\b(could|can|would|will) you\b|\bplease\b|\b(send|share|forward|provide|let me know|tell me|confirm)\b|\bwhat('s| is| are)\b|\bdo you\b|\bare you\b|\bhave you\b|\bwhen\b|\bwhere\b|\bhow (much|soon|long)\b/i;
+  // Their own plans ("I'll email you the details") are not requests.
+  const OWN_ACTION = /^(i|we)(?:'ll| will| can| have| am|'m| would| shall)\b/i;
+
+  const REQUEST_TYPES = [
+    ['cvReceived', /\b(thanks for|received|got|reviewed|looked (?:at|over)|read|went through)\b[^.?!]{0,25}\b(cv|resume|résumé)\b/i, false],
+    ['cv', /\b(cv|resume|résumé)\b/i, true],
+    ['email', /\be-?mail(?: address)?\b/i, true],
+    ['phone', /\b(?:phone|mobile|contact) (?:number|no\.?)\b|\bnumber (?:to|i can) (?:call|reach)\b|\bcall you on\b/i, true],
+    ['salary', /\b(salary|compensation|comp expectations?|package|day rate|hourly rate|rate expectations?|pay expectations?|expected (?:salary|pay|rate))\b/i, true],
+    ['notice', /\b(notice period|(?:your|the) notice|how much notice|notice (?:do|would) you (?:need to )?give|when (?:could|can|would) you (?:start|join)|start date|available to (?:start|join)|earliest (?:start|you could start))\b/i, true],
+    ['rtw', /\b(right to work|work permit|visa|sponsor(?:ship)?|authori[sz]ed to work|work authori[sz]ation|eligible to work)\b/i, true],
+    ['relocate', /\brelocat\w*/i, true],
+    ['location', /\b(remote|hybrid|on-?site|in the office|office days|where are you (?:based|located)|based (?:in|out of)|(?:current )?location|commut\w*)\b/i, true],
+    ['interviewFormat', /\b(face[- ]to[- ]face|telephone interview|phone interview|video interview|interview format|in[- ]person interview)\b/i, true],
+    ['offers', /\b(other offers?|offers? in hand|interviews? in hand|other (?:processes|interviews)|in the pipeline|interviewing elsewhere)\b/i, true],
+    ['interviewAvailability', /\b(availability for (?:an? )?interview|available (?:for|to) (?:an? )?interview|interview availability)\b/i, true],
+    ['timeOptions', /\b(?:suggest|propose|send|share|give me|provide)\b[^.?!]{0,25}\b(?:times?|dates?|slots?)\b|\bwhat (?:dates?|times?|days?) (?:would |could )?(?:work|suit|are good)|\b(?:dates?|times?|slots?) that (?:work|suit)/i, true],
+    ['availability', /\b(when (?:are|would) you (?:be )?(?:free|available)|your availability|good time (?:for|to)|what time works|free for a (?:quick )?(?:call|chat)|available for a (?:quick )?(?:call|chat)|(?:schedule|set up|arrange|book) a (?:quick )?(?:call|chat|time|meeting)|(?:jump|hop) on a (?:quick )?call)\b/i, true],
+    ['experience', /\b(experience (?:with|in)|worked with|familiar with|background in|hands-on with)\b/i, true],
+    ['interest', /\b(interested in|open to|would you consider|keen on)\b[^.?!]{0,40}\b(role|position|opportunit\w*|job|move|change)\b|\bare you (?:still )?(?:looking|open to new|interested)\b/i, true],
+  ];
+
+  // [{ type, sentence }] in the order they were asked, one per type.
+  function detectRequests(text) {
+    const out = [];
+    const seen = new Set();
+    for (const sentence of splitSentences(text)) {
+      const asking = ASK_CUE.test(sentence) && !OWN_ACTION.test(sentence);
+      for (const [type, re, needsAsk] of REQUEST_TYPES) {
+        if (seen.has(type) || !re.test(sentence) || (needsAsk && !asking)) continue;
+        // "Thanks for your CV" is not a request to send it.
+        if (type === 'cv' && seen.has('cvReceived')) continue;
+        seen.add(type);
+        out.push({ type, sentence });
+      }
+    }
+    return out;
+  }
+
+  // Tech named in their question that I've mentioned myself.
+  function sharedTech(sentence, myText) {
+    const stop = /^(do|does|did|you|your|have|has|any|with|in|and|or|the|a|an|experience|worked|familiar|background|hands|on|what|how|much|are|is|we|our|i|my|also|really|years?|of|for|to|using|use)$/i;
+    const words = (sentence.match(/[A-Za-z][\w+#.]*[\w+#]/g) || []).filter(w => !stop.test(w));
+    const hits = [];
+    for (const w of words) {
+      const re = new RegExp('(^|[^\\w])' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w])', 'i');
+      if (re.test(myText) && !hits.some(h => h.toLowerCase() === w.toLowerCase())) hits.push(w);
+    }
+    return hits;
+  }
+
+  // Tools/tech named after "experience with …": capitalised or tech-looking words.
+  function askedTech(sentence) {
+    const m = String(sentence).match(/\b(?:experience (?:with|in)|worked with|familiar with|background in|hands-on with)\b([^?.!]*)/i);
+    const tail = m ? m[1] : '';
+    const stop = /^(and|or|the|a|an|any|some|of|in|with|at|for|to|you|your|it|them|both|also|other|similar|tools?|stack|technolog\w*|frameworks?)$/i;
+    return (tail.match(/[A-Za-z][\w+#.]*[\w+#]|[A-Za-z]/g) || [])
+      .filter(w => !stop.test(w) && (/^[A-Z]/.test(w) || /[\d+#]/.test(w) || /(js|sql|db|ops)$/i.test(w)))
+      .filter((w, i, arr) => arr.findIndex(x => x.toLowerCase() === w.toLowerCase()) === i);
+  }
+
+  const asSentence = s => {
+    const t = String(s || '').trim();
+    if (!t) return '';
+    const cap = t.charAt(0).toUpperCase() + t.slice(1);
+    return /[.!?]$/.test(cap) ? cap : cap + '.';
+  };
+
+  function joinList(items) {
+    if (items.length <= 1) return items.join('');
+    return items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1];
+  }
+
+  // One answer per request. Returns { text, asksBack }.
+  function locationSentence(d) {
+    if (!d.location) return 'I am currently located in [insert current location].';
+    return /^i\b/i.test(d.location) ? asSentence(d.location) : `I am currently located in ${d.location}.`;
+  }
+
+  // One answer per request, from my details. Unknown facts get a plausible,
+  // non-disqualifying answer or a polite deferral — never an invented fact.
+  function answerRequest(req, ctx, d) {
+    const myText = [ctx.myMessagesText, d.currentRole, d.lookingFor].filter(Boolean).join('\n');
+    switch (req.type) {
+      case 'cvReceived':
+        return { text: 'Glad it came through.' };
+      case 'cv':
+        return { text: d.cvLink ? `Here is my CV: ${d.cvLink}` : "I'll send my CV over shortly." };
+      case 'email':
+        return { text: d.email ? `My email is ${d.email}.` : "I'll send my email address over shortly." };
+      case 'phone':
+        if (d.phone) return { text: `You can reach me on ${d.phone}.` };
+        return { text: d.email ? `The best way to reach me is by email at ${d.email}.` : "Happy to share my number once we've arranged a call." };
+      case 'salary':
+        return d.salary
+          ? { text: `My expected salary is ${d.salary}.` }
+          : { text: "On compensation, I'd rather hear the budgeted range for the role first. What range are you working with?", asksBack: true };
+      case 'notice': {
+        const n = (d.notice || '').trim();
+        if (!n) return { text: 'I can be flexible on my start date.' };
+        if (/^(immediate|now|available now|asap|straight away)/i.test(n)) return { text: 'I can start immediately.' };
+        return { text: /\b(notice|start|available)\b/i.test(n) ? asSentence(n) : `I am available to start after my notice period of ${n}.` };
+      }
+      case 'rtw':
+        return { text: d.rightToWork ? asSentence(d.rightToWork) : 'I have the right to work, and happy to share details.' };
+      case 'location':
+        return { text: locationSentence(d) };
+      case 'relocate':
+        return { text: /\bcontract\b/i.test(req.sentence) && d.relocateContract ? asSentence(d.relocateContract) : asSentence(d.relocate || 'Yes, I am willing to relocate.') };
+      case 'interviewFormat':
+        return { text: asSentence(d.interviewFormat || 'Yes, I am happy to attend both face-to-face and telephone interviews.') };
+      case 'offers':
+        return { text: asSentence(d.offers || 'I currently do not have any other offers or interviews in hand.') };
+      case 'interviewAvailability':
+        return { text: asSentence(d.interviewAvailability || 'I am available to attend interviews at your convenience.') };
+      case 'availability':
+        return d.calendarLink
+          ? { text: `Here is my booking link, feel free to pick any slot that suits: ${d.calendarLink}` }
+          : { text: timeOptionsText(d) };
+      case 'timeOptions':
+        return { text: timeOptionsText(d) };
+      case 'experience': {
+        // Confirm what I've mentioned myself; for the rest, a plausible,
+        // non-disqualifying answer (never a claimed specific).
+        const asked = askedTech(req.sentence);
+        const known = sharedTech(req.sentence, myText).filter(t => asked.some(a => a.toLowerCase() === t.toLowerCase()));
+        const unknown = asked.filter(a => !known.some(k => k.toLowerCase() === a.toLowerCase()));
+        const out = [];
+        if (known.length) {
+          const yrs = d.years ? `, with ${d.years} years of experience overall` : '';
+          out.push(`Yes, I've worked with ${joinList(known)}${yrs}.`);
+        }
+        if (unknown.length) out.push(`I pick up new tools quickly, so ${joinList(unknown)} wouldn't be a problem.`);
+        return { text: out.join(' ') || "Yes, and I'm happy to go into specifics on a call." };
+      }
+      case 'interest':
+        return (d.lookingFor)
+          ? { text: `Yes, I'm open to it. It sounds in line with the ${d.lookingFor} I'm looking for.` }
+          : { text: "Yes, I'm open to hearing more." };
+      default:
+        return { text: '' };
+    }
+  }
+
+  // Answer each request in order (or the full shortlisting block), then
+  // accept a proposed time if there was one. No filler closers.
+  function buildAnswerReply(ctx, style) {
+    const d = ctx.details || {};
+    const theirs = (ctx.lastMessage && ctx.lastMessage.text) || '';
+    if (isShortlistRequest(theirs)) return buildShortlistReply(d);
+
+    const parts = [];
+    if (ctx.sharedDetails) {
+      parts.push(ctx.topics.includes('job') ? 'Thanks for sending the job description over.' : 'Thanks for sending that over.');
+    }
+
+    const types = ctx.requests.map(r => r.type);
+    const answers = [];
+    for (const req of ctx.requests) {
+      // A proposed time covers "when are you free"; explicit time options
+      // already include the booking link.
+      if (req.type === 'availability' && (ctx.proposedSlot || types.includes('timeOptions'))) continue;
+      const a = answerRequest(req, ctx, d);
+      if (a.text) answers.push(a.text);
+    }
+    // Several answers read best one per line (and a link never runs into
+    // the next sentence); a single answer stays inline.
+    const answerText = answers.join(answers.length > 1 ? '\n' : ' ');
+    let body = parts.length
+      ? parts.join(' ') + (answerText ? (answers.length > 1 ? '\n\n' : ' ') + answerText : '')
+      : answerText;
+    if (ctx.proposedSlot) {
+      const sched = buildSchedulingReply({ ...ctx, sharedDetails: false }, style === 'casual' ? 'casual' : 'professional');
+      body = body ? body + '\n' + sched : sched;
+    } else if (types.includes('interest') && !types.includes('availability') && !types.includes('timeOptions') && style !== 'direct') {
+      body += '\n\nHappy to jump on a call to go through it.';
+    }
+    return body;
+  }
+
+
+  // Reviewer-facing gaps in a draft ("[notice period]") — Insert & Send
+  // refuses to send until they're filled in.
+  function findPlaceholders(text) {
+    return (String(text || '').match(/\[[^\]\n]{2,140}\]/g) || []);
+  }
+
+  // ═══════════════════════════════════════════
+  //  MAXMILLIAM'S REPLY RULES
+  //  British English, plain text, sign-off, UK-time scheduling, automatic
+  //  post-interview thank-you, and the standard CV shortlisting answers.
+  // ═══════════════════════════════════════════
+
+  // ─── UK time (BST in summer, GMT otherwise) ───
+  function londonOffsetMin(date) {
+    try {
+      const tz = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', timeZoneName: 'short' })
+        .formatToParts(date).find(p => p.type === 'timeZoneName').value;
+      return /BST|GMT\+1|UTC\+1/.test(tz) ? 60 : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+  const ukLabel = date => (londonOffsetMin(date) ? 'BST' : 'GMT');
+
+  // Calendar fields of an instant, as seen in the UK.
+  function ukParts(date) {
+    const d = new Date(date.getTime() + londonOffsetMin(date) * 60000);
+    return { y: d.getUTCFullYear(), m: d.getUTCMonth(), d: d.getUTCDate(), dow: d.getUTCDay(), h: d.getUTCHours(), min: d.getUTCMinutes() };
+  }
+
+  // The instant for a UK wall-clock time.
+  function ukInstant(y, m, d, h, min) {
+    const guess = new Date(Date.UTC(y, m, d, h, min));
+    return new Date(guess.getTime() - londonOffsetMin(guess) * 60000);
+  }
+
+  const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const MONTH_RE = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+  const monthIndex = s => ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(String(s).slice(0, 3).toLowerCase());
+  const pad2 = n => String(n).padStart(2, '0');
+
+  // "Monday 29 September"
+  function ukDateLabel(y, m, d) {
+    const dow = new Date(Date.UTC(y, m, d)).getUTCDay();
+    return `${DOW[dow]} ${d} ${MONTHS[m]}`;
+  }
+
+  // Three options, Monday–Friday, 12:00–18:00 UK time, 2–3 days from today
+  // (never today, never a weekend; if those days fall on a weekend, the
+  // next weekdays).
+  function proposeTimeOptions(now = new Date()) {
+    const t = ukParts(now);
+    const days = [];
+    for (let off = 2; days.length < 2 && off < 10; off++) {
+      const dt = new Date(Date.UTC(t.y, t.m, t.d + off));
+      const dow = dt.getUTCDay();
+      if (dow === 0 || dow === 6) continue;
+      days.push({ y: dt.getUTCFullYear(), m: dt.getUTCMonth(), d: dt.getUTCDate() });
+    }
+    const slots = [[days[0], 12], [days[0], 15], [days[1], 14]];
+    return slots.map(([day, h]) => {
+      const inst = ukInstant(day.y, day.m, day.d, h, 0);
+      return `${ukDateLabel(day.y, day.m, day.d)} at ${pad2(h)}:00 ${ukLabel(inst)}`;
+    });
+  }
+
+  function timeOptionsText(d) {
+    const link = d.calendarLink ? `\n\nAlternatively, feel free to pick a slot here: ${d.calendarLink}` : '';
+    return 'I could do any of the following:\n' + proposeTimeOptions().join('\n') + link;
+  }
+
+  // "Tuesday, 22 August" when 22 August is a Wednesday.
+  function findWeekdayMismatch(text, now = new Date()) {
+    const DAY = '(monday|tuesday|wednesday|thursday|friday|saturday|sunday)';
+    const ORD = '(\\d{1,2})(?:st|nd|rd|th)?';
+    const patterns = [
+      new RegExp('\\b' + DAY + ',?\\s+(?:the\\s+)?' + ORD + '\\s+(?:of\\s+)?' + MONTH_RE + '\\b(?:,?\\s+(\\d{4}))?', 'i'),
+      new RegExp('\\b' + DAY + ',?\\s+' + MONTH_RE + '\\s+' + ORD + '\\b(?:,?\\s+(\\d{4}))?', 'i'),
+    ];
+    const t = ukParts(now);
+    for (let i = 0; i < patterns.length; i++) {
+      const m = String(text || '').match(patterns[i]);
+      if (!m) continue;
+      const stated = DOW.findIndex(x => x.toLowerCase() === m[1].toLowerCase());
+      const day = +(i === 0 ? m[2] : m[3]);
+      const mon = monthIndex(i === 0 ? m[3] : m[2]);
+      let year = m[4] ? +m[4] : t.y;
+      // No year given and the date is well in the past → they mean next year.
+      if (!m[4] && Date.UTC(year, mon, day) < Date.UTC(t.y, t.m, t.d) - 30 * 86400000) year++;
+      const actual = new Date(Date.UTC(year, mon, day)).getUTCDay();
+      if (actual === stated) return null;
+      // The stated weekday in that same week, for "did you mean…".
+      let alt = new Date(Date.UTC(year, mon, day + (stated - actual)));
+      if (alt.getTime() < Date.UTC(t.y, t.m, t.d)) alt = new Date(alt.getTime() + 7 * 86400000);
+      return {
+        stated: DOW[stated],
+        dateLabel: `${day} ${MONTHS[mon]}`,
+        actualLabel: ukDateLabel(year, mon, day),
+        altLabel: ukDateLabel(alt.getUTCFullYear(), alt.getUTCMonth(), alt.getUTCDate()),
+      };
+    }
+    return null;
+  }
+
+  // ─── Interview confirmation + automatic thank-you ───
+  const ZONES = { bst: 60, gmt: 0, utc: 0, cet: 60, cest: 120, eet: 120, eest: 180, est: -300, edt: -240, cst: -360, cdt: -300, pst: -480, pdt: -420, ist: 330 };
+
+  // US daylight saving: second Sunday of March to first Sunday of November.
+  function usDaylight(date) {
+    const y = date.getUTCFullYear();
+    const nthSunday = (mon, n) => {
+      const first = new Date(Date.UTC(y, mon, 1)).getUTCDay();
+      return Date.UTC(y, mon, 1 + ((7 - first) % 7) + (n - 1) * 7);
+    };
+    const t = date.getTime();
+    return t >= nthSunday(2, 2) && t < nthSunday(10, 1);
+  }
+
+  // Parse the interview time from a confirmation message.
+  // msgDate: the message's own UK date {y, m, d}, for "Tuesday" / "tomorrow".
+  function parseInterviewTime(text, msgDate) {
+    const s = String(text || '');
+    let y = msgDate.y, m = msgDate.m, d = msgDate.d, found = false;
+
+    const explicit = s.match(new RegExp('\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?' + MONTH_RE + '\\b(?:,?\\s+(\\d{4}))?', 'i'))
+      || s.match(new RegExp('\\b' + MONTH_RE + '\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4}))?', 'i'));
+    if (explicit) {
+      const dayFirst = /^\d/.test(explicit[1]);
+      d = +(dayFirst ? explicit[1] : explicit[2]);
+      m = monthIndex(dayFirst ? explicit[2] : explicit[1]);
+      y = explicit[3] ? +explicit[3] : msgDate.y;
+      if (!explicit[3] && Date.UTC(y, m, d) < Date.UTC(msgDate.y, msgDate.m, msgDate.d) - 30 * 86400000) y++;
+      found = true;
+    } else if (/\btomorrow\b/i.test(s)) {
+      const dt = new Date(Date.UTC(msgDate.y, msgDate.m, msgDate.d + 1));
+      y = dt.getUTCFullYear(); m = dt.getUTCMonth(); d = dt.getUTCDate(); found = true;
+    } else if (/\btoday\b/i.test(s)) {
+      found = true;
+    } else {
+      const wd = s.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+      if (wd) {
+        const target = DOW.findIndex(x => x.toLowerCase() === wd[1].toLowerCase());
+        const base = new Date(Date.UTC(msgDate.y, msgDate.m, msgDate.d));
+        const add = (target - base.getUTCDay() + 7) % 7;
+        const dt = new Date(Date.UTC(msgDate.y, msgDate.m, msgDate.d + add));
+        y = dt.getUTCFullYear(); m = dt.getUTCMonth(); d = dt.getUTCDate(); found = true;
+      }
+    }
+    if (!found) return null;
+
+    // Start time: "11:00", "2:30 pm", "11am", "at 11". A bare number only
+    // counts after "at"/"from", so "1 to 2 interviewers" isn't a time.
+    const to24 = (h, ap, bare) => {
+      h = +h;
+      if (/pm/i.test(ap || '') && h < 12) h += 12;
+      else if (/am/i.test(ap || '') && h === 12) h = 0;
+      else if (!ap && bare && h >= 1 && h <= 7) h += 12; // "at 3" in business hours = 15:00
+      return h;
+    };
+    const cand = /(?:\b(at|from|@)\s*)?\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?(?![\d:])/gi;
+    let start = null;
+    let c;
+    while ((c = cand.exec(s))) {
+      if (!(c[3] || c[4] || c[1])) continue;
+      if (+c[2] > 23 || (c[3] && +c[3] > 59)) continue;
+      start = { h: to24(c[2], c[4], !c[3] && !c[4]), min: +(c[3] || 0), end: cand.lastIndex, ap: c[4] };
+      break;
+    }
+    if (!start) return null;
+    const sh = start.h;
+    const smin = start.min;
+    let durationMin = 30;
+    const endM = s.slice(start.end).match(/^\s*(?:-|–|to|until|till)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+    if (endM) {
+      const eh = to24(endM[1], endM[3] || start.ap, !endM[2] && !endM[3] && !start.ap);
+      const diff = (eh * 60 + +(endM[2] || 0)) - (sh * 60 + smin);
+      if (diff > 0 && diff <= 8 * 60) durationMin = diff;
+    } else {
+      const dur = s.match(/\b(\d{1,3})\s*(?:-\s*)?min(?:ute)?s?\b/i) || s.match(/\b(an|one|1|two|2)\s*(?:-\s*)?hours?\b/i);
+      if (dur) durationMin = /min/i.test(dur[0]) ? +dur[1] : (/(two|2)/i.test(dur[1]) ? 120 : 60);
+    }
+
+    // Stated timezone, else UK time.
+    const zm = s.match(/\b(BST|GMT|UTC|CET|CEST|EET|EEST|EST|EDT|CST|CDT|PST|PDT)\b(?:\s*([+-]\d{1,2}))?/i);
+    let startAt;
+    let zoneLabel;
+    if (zm) {
+      // People write "CET"/"EST" all year; in summer they mean CEST/EDT.
+      const z = zm[1].toLowerCase();
+      const probe = new Date(Date.UTC(y, m, d, 12));
+      let off = ZONES[z] + (zm[2] ? +zm[2] * 60 : 0);
+      if ((z === 'cet' || z === 'eet') && londonOffsetMin(probe)) off += 60;
+      if (['est', 'cst', 'pst'].includes(z) && usDaylight(probe)) off += 60;
+      startAt = new Date(Date.UTC(y, m, d, sh, smin) - off * 60000);
+      zoneLabel = zm[1].toUpperCase();
+    } else {
+      startAt = ukInstant(y, m, d, sh, smin);
+      zoneLabel = ukLabel(startAt);
+    }
+    return { start: startAt, end: new Date(startAt.getTime() + durationMin * 60000), y, m, d, h: sh, min: smin, zoneLabel, explicitZone: !!zm };
+  }
+
+  const CONFIRM_CUE = /confirmed for your interview|your interview (?:is|has been) (?:scheduled|confirmed|booked|set)|interview (?:is|has been) (?:scheduled|confirmed|booked)|(?:confirm|confirming|confirmed) (?:your|the) interview|interview (?:invite|invitation|confirmation)|(?:zoom|teams|google meet|meet) (?:link|invite|invitation)|join (?:the )?(?:zoom|teams|meet)/i;
+
+  // The interview in this thread, if one was confirmed.
+  function findInterview(messages, now = new Date()) {
+    const today = ukParts(now);
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.isMe !== false || !/\binterview/i.test(msg.text) || !CONFIRM_CUE.test(msg.text)) continue;
+      const base = new Date(Date.UTC(today.y, today.m, today.d - (msg.day || 0)));
+      const when = parseInterviewTime(msg.text, { y: base.getUTCFullYear(), m: base.getUTCMonth(), d: base.getUTCDate() });
+      if (!when) continue;
+      const thanked = messages.slice(i + 1).some(x => x.isMe === true &&
+        /thank(?:s| you) for (?:the interview|your time|taking the time|speaking)|enjoyed (?:our|the) (?:conversation|chat|call)/i.test(x.text));
+      const role = (msg.text.match(/\b(?:for|about) the ((?:[A-Z][\w&/+.-]*\s?){1,6})\s(?:role|position|opening)\b/)
+        || msg.text.match(/\b((?:[A-Z][\w&/+.-]*\s){0,5}[A-Z][\w&/+.-]*) (?:role|position)\b/) || [])[1];
+      // Named interviewer: one other person named → them; otherwise the sender.
+      const named = [...msg.text.matchAll(/\b(?:with|interviewer(?:s)? (?:is|are|will be)?:?)\s+([A-Z][a-z]+)(?:\s+[A-Z][a-z]+)?/g)].map(x => x[1]);
+      const notNames = /^(teams|zoom|google|microsoft|meet|us|me|you|the|our|your|linkedin|hr|monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december)$/i;
+      const uniq = [...new Set(named)].filter(n => !notNames.test(n));
+      return {
+        when,
+        past: now.getTime() > when.end.getTime(),
+        thanked,
+        role: role ? role.trim() : '',
+        interviewer: uniq.length === 1 ? uniq[0] : '',
+      };
+    }
+    return null;
+  }
+
+  function buildInterviewThankYou(firstName, role, signOff) {
+    const about = role ? `the ${role} role and the team` : 'the role and the team';
+    return `Hi ${firstName},\n\nI just wanted to say thank you for the interview. I really enjoyed our conversation and learnt a lot about ${about}.\n\nI appreciate your time and insights.\n\nBest regards,\n${signOff}`;
+  }
+
+  // "11:00 CET (10:00 BST)" — make the UK equivalent explicit.
+  function quoteTime(when) {
+    const own = `${pad2(when.h)}:${pad2(when.min)} ${when.zoneLabel}`;
+    if (!when.explicitZone || /^(BST|GMT)$/.test(when.zoneLabel)) return `${pad2(when.h)}:${pad2(when.min)} ${ukLabel(when.start)}`;
+    const uk = ukParts(when.start);
+    return `${own} (${pad2(uk.h)}:${pad2(uk.min)} ${ukLabel(when.start)})`;
+  }
+
+  // ─── CV shortlisting ───
+  const SHORTLIST_ITEMS = [
+    ['rtw', /\b(nationality|citizenship|visa|right to work|work permit|sponsor(?:ship)?|eligible to work)\b/i],
+    ['notice', /\b(notice|start date|when (?:could|can|would) you (?:start|join)|availability to start|available to start)\b/i],
+    ['location', /\b(current location|where are you (?:based|located)|currently (?:based|located)|location)\b/i],
+    ['relocate', /\brelocat\w*/i],
+    ['salary', /\b(salary|daily rate|day rate|rate expectations?|compensation|expected (?:salary|rate|pay))\b/i],
+    ['interviewFormat', /\b(face[- ]to[- ]face|telephone|phone interview|video interview|interview format|in[- ]person)\b/i],
+    ['offers', /\b(other offers?|offers? in hand|interviews? in hand|other (?:processes|interviews)|in the pipeline)\b/i],
+    ['interviewAvailability', /\b(availability for (?:an? )?interview|available (?:for|to) (?:an? )?interview|interview availability)\b/i],
+  ];
+
+  function shortlistTopics(text) {
+    return SHORTLIST_ITEMS.filter(([, re]) => re.test(text)).map(([k]) => k);
+  }
+
+  function isShortlistRequest(text) {
+    return shortlistTopics(text).length >= 3 ||
+      /\bshortlist\w*|\b(?:the )?following (?:details|information|questions)|\bbelow (?:details|questions)|\bstandard (?:questions|details)\b/i.test(text);
+  }
+
+  // The full shortlisting answer, as a written reply in prose paragraphs.
+  function buildShortlistReply(d) {
+    const loc = d.location
+      ? (/^i\b/i.test(d.location) ? asSentence(d.location) : `I am currently located in ${d.location}.`)
+      : 'I am currently located in [insert current location].';
+    const p1 = [asSentence(d.rightToWork), `I am available to start after my notice period of ${d.notice || '[notice period]'}.`, loc].join(' ');
+    const p2 = [asSentence(d.relocate), asSentence(d.relocateContract), d.salary ? `My expected salary is ${d.salary}.` : '']
+      .filter(Boolean).join(' ');
+    const p3 = [asSentence(d.interviewFormat), asSentence(d.interviewAvailability), asSentence(d.offers)].filter(Boolean).join(' ');
+    return ['Thanks for getting in touch. Please see my details below.', p1, p2, p3].filter(Boolean).join('\n\n');
+  }
+
+  // ─── British English ───
+  const BRITISH = [
+    [/\b(organi|personali|reali|recogni|priori|apologi|speciali|summari|finali|customi|minimi|maximi|utili|categori|emphasi|familiari|criti|memori|standardi)z(e|es|ed|ing|ation|ations)\b/gi, '$1s$2'],
+    [/\banalyz(e|es|ed|ing)\b/gi, 'analys$1'],
+    [/\b(col|fav|behavi|hon|lab|neighb|hum|flav)or(s|ed|ing|ite|ites|al)?\b/gi, '$1our$2'],
+    [/\bcenter(s|ed)?\b/gi, 'centre$1'],
+    [/\binquir(y|ies)\b/gi, 'enquir$1'],
+    [/\blearned\b/gi, 'learnt'],
+    [/\bcancel(ed|ing)\b/gi, 'cancell$1'],
+    [/\btravel(ed|ing|er)\b/gi, 'travell$1'],
+    [/\bfulfill\b/gi, 'fulfil'],
+    [/\benroll\b/gi, 'enrol'],
+    [/\bgray\b/gi, 'grey'],
+    // "while" as a conjunction → "whilst" (not "a while", "worth your while")
+    [/(^|[^\w])(?<!\b(?:a|your|the|for a|in a|after a|quite a|little)\s)while\b/gi, '$1whilst'],
+  ];
+  function britishise(text) {
+    // Links and email addresses are left exactly as they are.
+    return String(text || '').split(/(https?:\/\/\S+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)/).map((part, i) => {
+      if (i % 2) return part;
+      let out = part;
+      for (const [re, rep] of BRITISH) {
+        out = out.replace(re, (...m) => {
+          const matched = m[0];
+          const res = matched.replace(re, rep);
+          // Keep a capital on the word itself ("While" → "Whilst").
+          const first = matched.search(/[a-z]/i);
+          if (first >= 0 && matched[first] === matched[first].toUpperCase()) {
+            const at = res.search(/[a-z]/i);
+            return res.slice(0, at) + res.charAt(at).toUpperCase() + res.slice(at + 1);
+          }
+          return res;
+        });
+      }
+      return out;
+    }).join('');
+  }
+
+  // ─── Sign-off: "Maxmilliam", or "Best/Kind regards," when they're formal ───
+  function signOffFor(ctx, d) {
+    const name = d.signOffName || 'Maxmilliam';
+    const theirs = (ctx.lastMessage && ctx.lastMessage.text) || '';
+    const formal = theirs.match(/\b(kind|best|warm) regards\b|\bregards,|\byours sincerely\b/i);
+    if (!formal) return name;
+    const word = /kind/i.test(formal[0]) ? 'Kind' : 'Best';
+    return `${word} regards,\n${name}`;
+  }
+
+  // ─── Messages that need no reply ───
+  function isAutomated(text) {
+    return /\b(this is an automated|automated message|do not reply|no-?reply|unsubscribe|sponsored message)\b/i.test(String(text || ''));
+  }
+
+  // ─── Language check (templates write English only) ───
+  const LANG_HINTS = {
+    German: /\b(und|nicht|ich|sie|mit|für|wir|ist|danke|vielen|gerne|bitte|herzliche|grüße)\b/gi,
+    French: /\b(je|vous|nous|est|pour|avec|merci|bonjour|cordialement|votre|poste)\b/gi,
+    Spanish: /\b(que|para|con|usted|gracias|hola|saludos|puesto|tienes|estoy)\b/gi,
+    Dutch: /\b(het|een|ik|niet|met|voor|bedankt|groeten|graag|jij|jouw)\b/gi,
+    Italian: /\b(che|per|grazie|ciao|sono|della|lavoro|saluti|posizione)\b/gi,
+    Portuguese: /\b(você|obrigado|obrigada|olá|não|para|vaga|trabalho)\b/gi,
+    Polish: /\b(nie|się|jest|dziękuję|dzień dobry|pozdrawiam|praca|stanowisko)\b/gi,
+  };
+  function detectNonEnglish(text) {
+    const t = String(text || '');
+    const words = t.split(/\s+/).filter(Boolean).length;
+    if (words < 4) return '';
+    const english = (t.match(/\b(the|and|you|your|for|with|are|is|to|of|thanks|hi|would|could|we|our)\b/gi) || []).length;
+    let best = '', score = 0;
+    for (const [lang, re] of Object.entries(LANG_HINTS)) {
+      const n = (t.match(re) || []).length;
+      if (n > score) { score = n; best = lang; }
+    }
+    return score >= 2 && score > english ? best : '';
   }
 
   function buildColdOutreach(name, tone, goal, profile, ctx) {
@@ -1480,11 +2369,18 @@
     // quoting the question back at them.
     const t = ctx.topics || [];
     const casual = tone === 'casual' || tone === 'witty';
+    const raw = (ctx.lastMessage && ctx.lastMessage.text) || '';
+    // "How are you?" / "How's your week going?"
+    if (/\bhow(?:'s| is| are| has| have)\s+(?:you|it going|things|your (?:week|day|weekend))\b[^?]{0,20}\?/i.test(raw)
+        && raw.replace(/\s+/g, ' ').trim().length < 90) {
+      return casual ? "Doing well, thanks! How about you?" : "Doing well, thanks. How about you?";
+    }
     // "When are you free?" → answer it.
     if (t.includes('meeting')) {
-      return casual
-        ? `Sure. I'm pretty flexible this week, send over a time that suits and I'll make it work.`
-        : `Happy to. I'm fairly flexible this week, so just let me know a time that suits and I'll make it work.`;
+      const link = (ctx.details || {}).calendarLink;
+      return link
+        ? `Happy to. Here is my booking link, feel free to pick any slot that suits: ${link}`
+        : timeOptionsText(ctx.details || {});
     }
     // "How much is it?" → the pricing reply, sized to the question.
     if (t.includes('pricing')) {
@@ -1499,52 +2395,11 @@
         : `I'm open to hearing more. Could you share a bit about the role and what the team is working on at the moment?`;
     }
 
-    const replies = {
-      professional: {
-        s: [
-          `Happy to get into it. Got 10 minutes this week for a call?`,
-          `Worth a proper answer. Free for a quick call this week?`,
-        ],
-        m: [
-          `Happy to talk through it properly. Do you have 10-15 minutes this week for a short call?`,
-          `Good question to cover properly. A 15-minute call would be easier than typing it out — any time this week that works?`,
-        ],
-        l: [
-          `Appreciate the detail. Rather than half-answer this in a DM, it'd be more useful to talk it through on a short call where I can understand your setup first and give you a straight answer.\n\nIs there a 15-minute window this week or next that works?`,
-          `Thanks for the context, that helps. The honest answer depends on a few things specific to your situation, which is easier to cover on a call than here.\n\nI'm free most mornings next week — anything suit on your end?`,
-        ],
-      },
-      casual: {
-        s: [
-          `Happy to talk through it. Got 10 min?`,
-          `Worth a proper answer. Free for a quick call this week?`,
-        ],
-        m: [
-          `Happy to talk through it properly. Got 10-15 min this week?`,
-          `Good one to cover on a call rather than typing it out. What's this week looking like?`,
-        ],
-        l: [
-          `Thanks for the detail. Rather than half-answer in a DM, 15 minutes on a call would be more useful — I can actually tailor the answer to your setup.\n\nWhat's your week looking like?`,
-        ],
-      },
-      enthusiastic: {
-        s: [`Happy to get into it. Got 10 min this week?`],
-        m: [`Happy to get into it properly. What's your week like for a short call?`],
-        l: [
-          `Appreciate the detail. Worth covering properly on a call rather than trying to squeeze it into a DM — 15 minutes and I can give you something actually useful based on your situation.\n\nWhat works this week?`,
-        ],
-      },
-      witty: {
-        s: [`Rather answer that properly. Got 10 min?`],
-        m: [`Rather answer that properly than half-answer it here. Got 10 min this week?`],
-        l: [
-          `Appreciate the detail. I could type out a wall of text, but a 15-minute call would actually answer this properly — happy to work around your calendar.\n\nWhat suits?`,
-        ],
-      },
-    };
-    const bank = replies[tone] || replies.professional;
-    const len = ctx.matchLength || 's';
-    return pick(bank[len] || bank.s);
+    // Anything else: we can't know the answer, so politely defer rather
+    // than invent one.
+    return ctx.style === 'direct'
+      ? "Happy to go into that on a call."
+      : "Good to go into that properly. Happy to cover it on a call if that works for you.";
   }
 
   function buildObjectionReply(ctx, tone, goal) {
@@ -1804,29 +2659,244 @@
   // there would make no sense.
   const MSG_FORM_SELECTOR = 'form.msg-form, div.msg-form';
 
-  function createAIButton() {
+  const CONTROLS_CLASS = 'outreach-dm-controls';
+  const TONE_SELECT_CLASS = 'outreach-dm-tone';
+  const SEND_BTN_CLASS = 'outreach-dm-send';
+
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const norm = s => String(s || '').replace(/\s+/g, ' ').trim();
+
+  // Our last draft per composer, so Insert & Send knows whether the box holds
+  // a draft the user has already seen (send it as-is, edits included) or
+  // something else (e.g. an old draft LinkedIn restored — replace it).
+  const lastDrafts = new WeakMap();
+
+  // [✨ AI Reply] [tone ▾] [➤] — one group per chat.
+  function createAIControls() {
+    const group = document.createElement('span');
+    group.className = CONTROLS_CLASS;
+
     const btn = document.createElement('button');
     btn.type = 'button'; // never submit the surrounding LinkedIn form
     btn.className = AI_BTN_CLASS;
     btn.innerHTML = '<span style="animation:dm-ai-sparkle 2s ease-in-out infinite;display:inline-flex">✨</span><span>AI Reply</span>';
-    btn.title = 'Click: draft a reply to this conversation | Right-click: choose outcome / training';
-
-    // Single click → draft directly into this chat's message box
+    btn.title = 'Draft a reply to this conversation (right-click: outcome, My details, training)';
     btn.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
       await directDraftReply(btn);
     });
-
-    // Right-click → open the full panel for tone/outcome selection
     btn.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       e.stopPropagation();
       toggleAIPanel(btn);
     });
 
-    return btn;
+    const select = document.createElement('select');
+    select.className = TONE_SELECT_CLASS;
+    select.title = 'Reply tone';
+    select.setAttribute('aria-label', 'Reply tone');
+    for (const [value, label] of Object.entries(TONES)) {
+      const o = document.createElement('option');
+      o.value = value;
+      o.textContent = label;
+      select.appendChild(o);
+    }
+    select.value = currentTone;
+    ['click', 'mousedown', 'keydown'].forEach(ev => select.addEventListener(ev, e => e.stopPropagation()));
+    select.addEventListener('change', () => onToneChange(select, btn));
+
+    const send = document.createElement('button');
+    send.type = 'button';
+    send.className = SEND_BTN_CLASS;
+    send.textContent = '➤';
+    send.title = 'Insert & Send — sends your reviewed draft, or drafts a reply and sends it';
+    send.setAttribute('aria-label', 'Insert and send AI reply');
+    send.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await insertAndSend(send, btn);
+    });
+
+    group.append(btn, select, send);
+    return group;
   }
+
+  // Draft a reply for the chat `origin` belongs to and put it in the box.
+  async function draftInto(origin) {
+    const profile = await getActiveProfile();
+    const { scope, composer } = resolveTarget(origin);
+    const conversation = scrapeConversation(scope, composer);
+    const details = await getMyDetails(conversation);
+    // What was read — senders and lengths only, never message text.
+    log('Draft for', conversation.partnerName, '| tone:', currentTone, '| composer found:', !!composer,
+      '| messages:', conversation.messages.map(m => `${m.isMe ? 'me' : m.isMe === false ? 'them' : '?'}:${m.text.length}ch`).join(' '));
+    const meta = {};
+    const reply = generateResponse(profile, conversation, { tone: currentTone, details, meta });
+    if (meta.noReply) {
+      showDMToast('No reply needed: this looks like an automated message.', 'success');
+      return { reply: '', conversation, composer, meta };
+    }
+    insertIntoMessageBox(reply, scope, composer);
+    if (composer) {
+      lastDrafts.set(composer, { text: reply, partner: conversation.partnerName, tooSoon: meta.tooSoon, daysAgo: meta.lastMineDaysAgo, language: meta.language });
+    }
+
+    const gaps = findPlaceholders(reply);
+    if (meta.language) {
+      showDMToast(`${firstNameOf(conversation.partnerName) || 'They'} wrote in ${meta.language}. This draft is in English, so translate it before sending.`, 'error');
+    } else if (meta.tooSoon) {
+      showDMToast(`You messaged ${firstNameOf(conversation.partnerName) || 'them'} ${whenLabel(meta.lastMineDaysAgo)} — give it a few days before sending a follow-up.`, 'error');
+    } else if (!conversation.messages.length) {
+      showDMToast("Couldn't read this chat's messages, so this is a first-message draft.", 'error');
+    } else if (gaps.length) {
+      showDMToast(`Fill in ${gaps.join(', ')} — or save it once in My details (right-click AI Reply).`, 'error');
+    }
+    return { reply, conversation, composer, meta };
+  }
+
+  function setBusy(btn, busy, label) {
+    if (busy) {
+      btn.dataset.busy = '1';
+      btn.dataset.html = btn.innerHTML;
+      btn.innerHTML = `<span style="display:inline-flex;animation:dm-ai-sparkle 0.5s ease-in-out infinite">⏳</span><span>${label}</span>`;
+      btn.disabled = true;
+      btn.style.opacity = '0.7';
+    } else {
+      if (btn.dataset.html) btn.innerHTML = btn.dataset.html;
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      delete btn.dataset.busy;
+      delete btn.dataset.html;
+    }
+  }
+
+  // One-click: generate a reply and insert it into this chat's message box
+  async function directDraftReply(btn) {
+    if (btn.dataset.busy === '1') return;
+    setBusy(btn, true, 'Drafting...');
+    try {
+      await draftInto(btn);
+    } catch (err) {
+      console.error('[OutreachPro DM] Draft error:', err);
+      showDMToast('Could not generate reply. Try again.', 'error');
+    } finally {
+      setBusy(btn, false);
+    }
+  }
+
+  // New tone: remember it everywhere, and redo our draft in this chat if the
+  // user hasn't edited it (never overwrite their edits).
+  async function onToneChange(select, aiBtn) {
+    currentTone = TONES[select.value] ? select.value : 'professional';
+    storageSet({ [TONE_KEY]: currentTone });
+    deepQueryAll('select.' + TONE_SELECT_CLASS).forEach(s => { if (s !== select) s.value = currentTone; });
+
+    const { composer } = resolveTarget(select);
+    const prev = composer && lastDrafts.get(composer);
+    if (prev && norm(readText(composer)) === norm(prev.text)) {
+      await directDraftReply(aiBtn);
+    } else {
+      showDMToast(`Tone: ${TONES[currentTone]}`, 'success');
+    }
+  }
+
+  function whenLabel(days) {
+    if (days === 0) return 'today';
+    if (days === 1) return 'yesterday';
+    return days == null ? 'recently' : `${days} days ago`;
+  }
+
+  // LinkedIn's own Send button for this composer.
+  function findSendFor(composer) {
+    let cur = composer.closest('[' + UNIT_ATTR + '], ' + MSG_FORM_SELECTOR) || composer.parentElement;
+    for (let i = 0; cur && i < 6; i++, cur = cur.parentElement) {
+      const b = cur.querySelector('.msg-form__send-button, button.msg-form__send-btn') ||
+        [...cur.querySelectorAll('button')].find(isSendButton);
+      if (b) return b;
+    }
+    return null;
+  }
+
+  // Click Send once LinkedIn has enabled it; "sent" = LinkedIn cleared the box.
+  async function clickSend(composer) {
+    const btn = findSendFor(composer);
+    if (!btn) return 'no-button';
+    const disabled = () => btn.disabled || btn.getAttribute('aria-disabled') === 'true';
+    for (let i = 0; i < 40 && disabled(); i++) await sleep(50);
+    if (disabled()) return 'disabled';
+    btn.click();
+    for (let i = 0; i < 80; i++) {
+      await sleep(50);
+      if (!norm(readText(composer))) return 'sent';
+    }
+    return 'unconfirmed';
+  }
+
+  async function insertAndSend(sendBtn, aiBtn) {
+    if (sendBtn.dataset.busy === '1') return;
+    sendBtn.dataset.busy = '1';
+    sendBtn.disabled = true;
+    try {
+      const { scope, composer } = resolveTarget(sendBtn);
+      if (!composer) {
+        showDMToast("Couldn't find this chat's message box — nothing sent.", 'error');
+        return;
+      }
+      // Send the box as-is only if it holds our draft for this same chat
+      // (the user has seen it, maybe edited it). Otherwise draft fresh.
+      const prev = lastDrafts.get(composer);
+      const partner = scrapeConversation(scope, composer).partnerName;
+      const reviewed = prev && prev.partner === partner && norm(readText(composer));
+      if (!reviewed) {
+        setBusy(aiBtn, true, 'Drafting...');
+        let res;
+        try { res = await draftInto(sendBtn); } finally { setBusy(aiBtn, false); }
+        if (res && res.meta && res.meta.noReply) return;
+      }
+
+      const text = readText(composer);
+      const gaps = findPlaceholders(text);
+      if (gaps.length) {
+        showDMToast(`Not sent: fill in ${gaps.join(', ')} first.`, 'error');
+        composer.focus();
+        return;
+      }
+      const entry = lastDrafts.get(composer);
+      if (entry && entry.language) {
+        showDMToast(`Not sent: they wrote in ${entry.language}. Translate the draft, then press Send.`, 'error');
+        composer.focus();
+        return;
+      }
+      if (entry && entry.tooSoon) {
+        showDMToast(`Not sent: you already messaged them ${whenLabel(entry.daysAgo)}. A follow-up this soon can feel pushy — press Send yourself if you're sure.`, 'error');
+        composer.focus();
+        return;
+      }
+      if (!norm(text)) {
+        showDMToast('Nothing to send.', 'error');
+        return;
+      }
+
+      const result = await clickSend(composer);
+      if (result === 'sent') {
+        lastDrafts.delete(composer);
+        showDMToast('✅ Sent', 'success');
+      } else if (result === 'unconfirmed') {
+        showDMToast("Clicked Send but couldn't confirm it went — check the chat.", 'error');
+      } else {
+        showDMToast('Reply inserted, but Send was unavailable — press Send to send it.', 'error');
+      }
+    } catch (err) {
+      console.error('[OutreachPro DM] Insert & Send error:', err);
+      showDMToast('Could not send. Try again.', 'error');
+    } finally {
+      sendBtn.disabled = false;
+      delete sendBtn.dataset.busy;
+    }
+  }
+
+
 
   // The composer belonging to the same chat as `btn`. Each chat gets its own
   // button, so this is exact; the floating fallback button uses the composer
@@ -1846,37 +2916,7 @@
     return { scope, composer };
   }
 
-  // One-click: generate a reply and insert it into this chat's message box
-  async function directDraftReply(btn) {
-    if (btn.dataset.busy === '1') return;
-    btn.dataset.busy = '1';
-    const originalHTML = btn.innerHTML;
-    btn.innerHTML = '<span style="display:inline-flex;animation:dm-ai-sparkle 0.5s ease-in-out infinite">⏳</span><span>Drafting...</span>';
-    btn.disabled = true;
-    btn.style.opacity = '0.7';
 
-    try {
-      const profile = await getActiveProfile();
-      const { scope, composer } = resolveTarget(btn);
-      const conversation = scrapeConversation(scope, composer);
-      // What was read — senders and lengths only, never message text.
-      log('Draft for', conversation.partnerName, '| composer found:', !!composer,
-        '| messages:', conversation.messages.map(m => `${m.isMe ? 'me' : m.isMe === false ? 'them' : '?'}:${m.text.length}ch`).join(' '));
-      const reply = generateResponse(profile, conversation);
-      insertIntoMessageBox(reply, scope, composer);
-      if (!conversation.messages.length) {
-        showDMToast("Couldn't read this chat's messages, so this is a first-message draft.", 'error');
-      }
-    } catch (err) {
-      console.error('[OutreachPro DM] Draft error:', err);
-      showDMToast('Could not generate reply. Try again.', 'error');
-    } finally {
-      btn.innerHTML = originalHTML;
-      btn.disabled = false;
-      btn.style.opacity = '1';
-      delete btn.dataset.busy;
-    }
-  }
 
   function findMsgForms() {
     syncShadowRoots();
@@ -1902,7 +2942,7 @@
       const rootNode = form.getRootNode();
       if (rootNode !== document) ensureStylesIn(rootNode);
       form.setAttribute(UNIT_ATTR, '1');
-      anchor.prepend(createAIButton());
+      anchor.prepend(createAIControls());
       added++;
     }
 
@@ -1915,7 +2955,7 @@
       const rootNode = unit.getRootNode();
       if (rootNode !== document) ensureStylesIn(rootNode);
       unit.setAttribute(UNIT_ATTR, '1');
-      toolbarAnchor(unit, sendBtn).prepend(createAIButton());
+      toolbarAnchor(unit, sendBtn).prepend(createAIControls());
       added++;
     }
     if (added) log('Injected AI Reply into', added, 'composer(s)');
@@ -1923,8 +2963,8 @@
     // Floating fallback: only when a chat composer exists that we could not
     // anchor into (e.g. LinkedIn changed its markup). Never on pages with no
     // chat open.
-    const anchored = deepQueryAll('.' + AI_BTN_CLASS + ':not(.floating)').length > 0;
-    const floating = document.querySelector('.' + AI_BTN_CLASS + '.floating');
+    const anchored = deepQueryAll('.' + CONTROLS_CLASS + ':not(.floating)').length > 0;
+    const floating = document.querySelector('.' + CONTROLS_CLASS + '.floating');
     const looseComposer = deepQuery(
       '.msg-form__contenteditable, [class*="msg-form"] [contenteditable="true"]'
     );
@@ -1933,7 +2973,7 @@
       return;
     }
     if (!floating) {
-      const b = createAIButton();
+      const b = createAIControls();
       b.classList.add('floating');
       document.body.appendChild(b);
       log('Injected floating AI Reply (composer without a known footer)');
@@ -1976,7 +3016,8 @@
       </div>
       <div class="dm-ai-tabs">
         <button class="dm-ai-tab active" data-tab="generate">🤖 Generate</button>
-        <button class="dm-ai-tab" data-tab="training">📚 Training Studio</button>
+        <button class="dm-ai-tab" data-tab="details">👤 My details</button>
+        <button class="dm-ai-tab" data-tab="training">📚 Training</button>
       </div>
       <div class="dm-ai-body" id="dm-ai-body">
         <!-- Generate tab -->
@@ -1985,17 +3026,27 @@
             <label style="font-size:10px;font-weight:700;color:#6366F1;text-transform:uppercase;display:block;margin-bottom:4px">Conversation Context</label>
             <div class="dm-ai-context-box">${esc(lastMsgPreview)}</div>
           </div>
-          <div style="margin-bottom:10px">
-            <label style="font-size:10px;font-weight:700;color:#6366F1;text-transform:uppercase;display:block;margin-bottom:4px">Desired Outcome</label>
-            <select class="dm-ai-outcome-select" id="dm-ai-outcome">
-              ${profiles.map(p => `<option value="${esc(p.id)}"${activeProfile && p.id === activeProfile.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
-            </select>
+          <div style="margin-bottom:10px;display:flex;gap:8px">
+            <div style="flex:2">
+              <label style="font-size:10px;font-weight:700;color:#6366F1;text-transform:uppercase;display:block;margin-bottom:4px">Desired Outcome</label>
+              <select class="dm-ai-outcome-select" id="dm-ai-outcome">
+                ${profiles.map(p => `<option value="${esc(p.id)}"${activeProfile && p.id === activeProfile.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
+              </select>
+            </div>
+            <div style="flex:1">
+              <label style="font-size:10px;font-weight:700;color:#6366F1;text-transform:uppercase;display:block;margin-bottom:4px">Tone</label>
+              <select class="dm-ai-outcome-select ${TONE_SELECT_CLASS}-panel" id="dm-ai-tone">
+                ${Object.entries(TONES).map(([v, l]) => `<option value="${v}"${v === currentTone ? ' selected' : ''}>${l}</option>`).join('')}
+              </select>
+            </div>
           </div>
           <div id="dm-ai-skel" style="display:none">
             <div class="dm-ai-skel l"></div><div class="dm-ai-skel m"></div><div class="dm-ai-skel l"></div><div class="dm-ai-skel s"></div>
           </div>
           <textarea id="dm-ai-response" placeholder="Click Generate to create your reply..." rows="5"></textarea>
         </div>
+        <!-- My details tab (hidden) -->
+        <div id="dm-ai-tab-details" style="display:none"></div>
         <!-- Training tab (hidden) -->
         <div id="dm-ai-tab-training" style="display:none"></div>
       </div>
@@ -2003,7 +3054,8 @@
         <button class="dm-ai-gen-btn" id="dm-ai-gen">✨ Generate Reply</button>
         <div style="display:flex;gap:6px;margin-left:auto">
           <button class="dm-ai-sec-btn" id="dm-ai-copy" style="display:none">📋 Copy</button>
-          <button class="dm-ai-insert-btn" id="dm-ai-insert" style="display:none">➤ Insert</button>
+          <button class="dm-ai-sec-btn" id="dm-ai-insert" style="display:none">Insert</button>
+          <button class="dm-ai-insert-btn" id="dm-ai-insert-send" style="display:none">➤ Insert &amp; Send</button>
         </div>
       </div>
       <div class="dm-ai-footer">Powered by <span class="hl">OutreachPro</span> — <span class="hl">∞ Unlimited</span> AI replies</div>
@@ -2022,8 +3074,10 @@
         tab.classList.add('active');
         const tabName = tab.dataset.tab;
         panel.querySelector('#dm-ai-tab-generate').style.display = tabName === 'generate' ? 'block' : 'none';
+        panel.querySelector('#dm-ai-tab-details').style.display = tabName === 'details' ? 'block' : 'none';
         panel.querySelector('#dm-ai-tab-training').style.display = tabName === 'training' ? 'block' : 'none';
         panel.querySelector('#dm-ai-actions').style.display = tabName === 'generate' ? 'flex' : 'none';
+        if (tabName === 'details') renderMyDetails(panel, conversation);
         if (tabName === 'training') renderTrainingStudio(panel);
       };
     });
@@ -2033,6 +3087,14 @@
     const skelArea = panel.querySelector('#dm-ai-skel');
     const copyBtn = panel.querySelector('#dm-ai-copy');
     const insertBtn = panel.querySelector('#dm-ai-insert');
+    const insertSendBtn = panel.querySelector('#dm-ai-insert-send');
+
+    // Tone, shared with every chat's selector.
+    panel.querySelector('#dm-ai-tone').onchange = e => {
+      currentTone = TONES[e.target.value] ? e.target.value : 'professional';
+      storageSet({ [TONE_KEY]: currentTone });
+      deepQueryAll('select.' + TONE_SELECT_CLASS).forEach(s => { s.value = currentTone; });
+    };
 
     panel.querySelector('#dm-ai-gen').onclick = async () => {
       const selectedId = panel.querySelector('#dm-ai-outcome').value;
@@ -2043,6 +3105,7 @@
       skelArea.style.display = 'block';
       copyBtn.style.display = 'none';
       insertBtn.style.display = 'none';
+      insertSendBtn.style.display = 'none';
 
       // Remember this choice for one-click drafting too.
       try { chrome.storage.local.set({ [DEFAULT_PROFILE_KEY]: profile.id }); } catch (e) { /* ignore */ }
@@ -2050,15 +3113,22 @@
       // Re-scrape at click time: new messages may have arrived.
       const live = target();
       const freshConv = scrapeConversation(live.scope, live.composer);
+      const details = await getMyDetails(freshConv);
 
       setTimeout(() => {
-        const reply = generateResponse(profile, freshConv);
+        const meta = {};
+        const reply = generateResponse(profile, freshConv, { tone: currentTone, details, meta });
+        panel.dataset.tooSoon = meta.tooSoon ? '1' : '';
+        panel.dataset.daysAgo = meta.lastMineDaysAgo == null ? '' : String(meta.lastMineDaysAgo);
         responseArea.value = reply;
         responseArea.style.display = 'block';
         skelArea.style.display = 'none';
         copyBtn.style.display = 'inline-flex';
         insertBtn.style.display = 'inline-flex';
-      }, 600);
+        insertSendBtn.style.display = 'inline-flex';
+        const gaps = findPlaceholders(reply);
+        if (gaps.length) showDMToast(`Fill in ${gaps.join(', ')} — or save it in My details.`, 'error');
+      }, 250);
     };
 
     // Copy
@@ -2073,6 +3143,34 @@
     insertBtn.onclick = () => {
       const { scope, composer } = target();
       insertIntoMessageBox(responseArea.value, scope, composer);
+      if (composer) lastDrafts.set(composer, { text: responseArea.value, partner: conversation.partnerName });
+    };
+
+    // Insert & Send: what's in the textarea is what gets sent (reviewed here).
+    insertSendBtn.onclick = async () => {
+      const text = responseArea.value;
+      const gaps = findPlaceholders(text);
+      if (gaps.length) {
+        showDMToast(`Not sent: fill in ${gaps.join(', ')} first.`, 'error');
+        responseArea.focus();
+        return;
+      }
+      if (!norm(text)) return;
+      if (panel.dataset.tooSoon === '1') {
+        const d = panel.dataset.daysAgo === '' ? null : +panel.dataset.daysAgo;
+        showDMToast(`Not sent: you already messaged them ${whenLabel(d)}. Use Insert and press Send yourself if you're sure.`, 'error');
+        return;
+      }
+      const { scope, composer } = target();
+      if (!composer) {
+        showDMToast("Couldn't find this chat's message box — nothing sent.", 'error');
+        return;
+      }
+      insertIntoMessageBox(text, scope, composer);
+      const result = await clickSend(composer);
+      if (result === 'sent') showDMToast('✅ Sent', 'success');
+      else if (result === 'unconfirmed') showDMToast("Clicked Send but couldn't confirm it went — check the chat.", 'error');
+      else showDMToast('Reply inserted, but Send was unavailable — press Send to send it.', 'error');
     };
   }
 
@@ -2181,6 +3279,34 @@
   // ═══════════════════════════════════════════
   //  8. TRAINING STUDIO UI
   // ═══════════════════════════════════════════
+  // "My details": the facts used to answer questions. Placeholders show what
+  // was found automatically in my own messages; typed values win.
+  async function renderMyDetails(panel, conversation) {
+    const box = panel.querySelector('#dm-ai-tab-details');
+    const manual = (await storageGet(DETAILS_KEY)) || {};
+    const found = await getMyDetails(conversation); // includes auto-found values
+    box.innerHTML = `
+      <div style="font-size:11px;color:#666;margin-bottom:10px;line-height:1.4">
+        Used to answer questions like "can you send your CV?" or "what's your notice period?".
+        Grey text = found in your own messages; type to override.
+      </div>
+      ${DETAIL_FIELDS.map(([key, label, ex]) => `
+        <label style="font-size:10px;font-weight:700;color:#6366F1;text-transform:uppercase;display:block;margin:8px 0 3px">${esc(label)}</label>
+        <input class="dm-ai-detail" data-key="${key}" value="${esc(manual[key] || '')}"
+          placeholder="${esc(found[key] && !manual[key] ? found[key] : 'e.g. ' + ex)}"
+          style="width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid #ddd;border-radius:8px;font:12px Inter,sans-serif">
+      `).join('')}
+      <button id="dm-ai-save-details" class="dm-ai-gen-btn" style="margin-top:12px;width:100%">Save details</button>
+    `;
+    box.querySelectorAll('input').forEach(i => ['keydown', 'keyup', 'keypress'].forEach(ev => i.addEventListener(ev, e => e.stopPropagation())));
+    box.querySelector('#dm-ai-save-details').onclick = () => {
+      const out = {};
+      box.querySelectorAll('.dm-ai-detail').forEach(i => { if (i.value.trim()) out[i.dataset.key] = i.value.trim(); });
+      storageSet({ [DETAILS_KEY]: out });
+      showDMToast('✅ Details saved', 'success');
+    };
+  }
+
   async function renderTrainingStudio(panel) {
     const container = panel.querySelector('#dm-ai-tab-training');
     const profiles = await getProfiles();
@@ -2400,11 +3526,311 @@
     for (const sr of shadowRoots) observer.observe(sr, { childList: true, subtree: true });
   }
 
+  // ═══════════════════════════════════════════
+  //  GMAIL — AI Reply in reply windows
+  //  Same engine, email channel: sign-off, no-reply detection, and the
+  //  interview thank-you drafted automatically when Reply opens.
+  // ═══════════════════════════════════════════
+  const GMAIL_UNIT_ATTR = 'data-outreach-gmail-unit';
+  const GMAIL_BODY_SEL = 'div[contenteditable="true"][g_editable="true"], div[contenteditable="true"][aria-label="Message Body"], div[contenteditable="true"][aria-label="Message body"]';
+  const gmailSeen = new WeakSet();       // compose bodies already offered an auto-draft
+  const gmailDrafts = new WeakMap();     // body → our last draft text
+
+  function gmailMyEmail() {
+    const acct = document.querySelector('a[aria-label^="Google Account"], a[aria-label*="Google Account:"]');
+    const m = acct && (acct.getAttribute('aria-label') || '').match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/);
+    return (m ? m[0] : DEFAULT_DETAILS.email).toLowerCase();
+  }
+
+  function gmailSendFor(body) {
+    let cur = body.parentElement;
+    for (let i = 0; cur && i < 14; i++, cur = cur.parentElement) {
+      const b = cur.querySelector('div[role="button"][data-tooltip^="Send"], div[role="button"][aria-label^="Send"]');
+      if (b) return { send: b, unit: cur };
+    }
+    return null;
+  }
+
+  // "Thu, 24 Sept 2026, 10:15" / "Sep 24, 2026, 10:15 AM" → Date (UK time)
+  function gmailParseDate(label) {
+    const s = String(label || '');
+    const T = '(\\d{1,2}):(\\d{2})\\s*(am|pm)?';
+    let m = s.match(new RegExp('(\\d{1,2})\\s+' + MONTH_RE + '\\w*\\.?\\s+(\\d{4}),?\\s*(?:at\\s+)?' + T, 'i'));
+    let day, mon, year, h, min, ap;
+    if (m) { [, day, mon, year, h, min, ap] = m; } else {
+      m = s.match(new RegExp(MONTH_RE + '\\w*\\.?\\s+(\\d{1,2}),?\\s+(\\d{4}),?\\s*(?:at\\s+)?' + T, 'i'));
+      if (!m) return null;
+      [, mon, day, year, h, min, ap] = m;
+    }
+    h = +h;
+    if (/pm/i.test(ap || '') && h < 12) h += 12;
+    if (/am/i.test(ap || '') && h === 12) h = 0;
+    return ukInstant(+year, monthIndex(mon), +day, h, +min);
+  }
+
+  function ukDaysAgo(date) {
+    const a = ukParts(date);
+    const b = ukParts(new Date());
+    return Math.round((Date.UTC(b.y, b.m, b.d) - Date.UTC(a.y, a.m, a.d)) / 86400000);
+  }
+
+  // Drop quoted history ("On … wrote:", "> …", Outlook headers) and signatures.
+  function stripQuoted(text) {
+    const lines = String(text || '').split('\n');
+    const out = [];
+    for (const line of lines) {
+      if (/^On .{3,200}wrote:\s*$/.test(line) || /^-{2,}\s*Original Message/i.test(line) || /^From:\s.+/.test(line) && out.length) break;
+      if (/^--\s*$/.test(line)) break;
+      if (/^>/.test(line)) continue;
+      out.push(line);
+    }
+    return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  // The open thread in the same shape the LinkedIn scraper returns.
+  function gmailConversation() {
+    const main = document.querySelector('div[role="main"]') || document.body;
+    const me = gmailMyEmail();
+    const messages = [];
+    main.querySelectorAll('div.adn').forEach(el => {
+      const from = el.querySelector('span.gD');
+      if (!from) return;
+      const email = (from.getAttribute('email') || '').toLowerCase();
+      const dateEl = el.querySelector('span.g3');
+      const when = dateEl ? gmailParseDate(dateEl.getAttribute('title') || readText(dateEl)) : null;
+      const bodyEl = el.querySelector('div.a3s');
+      const text = stripQuoted(readText(bodyEl || el.querySelector('span.y2')));
+      if (!text) return;
+      messages.push({
+        text,
+        sender: cleanPersonName(from.getAttribute('name') || readText(from)),
+        email,
+        isMe: email ? email === me : null,
+        day: when ? ukDaysAgo(when) : null,
+      });
+    });
+
+    const mine = messages.filter(m => m.isMe === true);
+    const lastFromMe = messages.length > 0 && messages[messages.length - 1].isMe === true;
+    let end = messages.length - 1;
+    while (end >= 0 && messages[end].isMe !== false) end--;
+    let lastMessage = null;
+    let partner = null;
+    if (end >= 0) {
+      let start = end;
+      while (start > 0 && messages[start - 1].isMe === false) start--;
+      const run = messages.slice(start, end + 1);
+      partner = run[run.length - 1];
+      lastMessage = { text: run.map(m => m.text).join('\n'), sender: partner.sender, isMe: false };
+    }
+    const partnerEmail = partner ? partner.email : '';
+    return {
+      messages: messages.slice(-10),
+      lastMessage,
+      partnerName: partner && looksLikeRealName(partner.sender) && !/@/.test(partner.sender) ? partner.sender : 'there',
+      partnerEmail,
+      noReplySender: /(^|[.+_-])(no-?reply|do-?not-?reply|notifications?|mailer-daemon|newsletters?|news|updates|marketing)@/i.test(partnerEmail),
+      partnerCompany: '',
+      partnerHeadline: '',
+      partnerDegree: '',
+      partnerReplied: messages.some(m => m.isMe === false),
+      myCount: mine.length,
+      lastMineDaysAgo: mine.length ? (mine[mine.length - 1].day ?? null) : null,
+      lastFromMe,
+      myOpener: mine.length ? mine[0].text : '',
+      myLatest: mine.length ? mine[mine.length - 1].text : '',
+      myMessagesText: mine.map(m => m.text).join('\n'),
+      subject: readText(document.querySelector('h2.hP')),
+    };
+  }
+
+  // Put the draft above Gmail's signature / quoted text, never over it.
+  function gmailInsert(body, text) {
+    body.querySelectorAll('.outreach-dm-draft').forEach(n => n.remove());
+    const wrap = document.createElement('div');
+    wrap.className = 'outreach-dm-draft';
+    for (const line of text.split('\n')) {
+      const div = document.createElement('div');
+      if (line.trim()) div.textContent = line;
+      else div.appendChild(document.createElement('br'));
+      wrap.appendChild(div);
+    }
+    const rest = [...body.childNodes].some(n => (n.textContent || '').trim() || (n.querySelector && n.querySelector('img')));
+    if (rest) {
+      const gap = document.createElement('div');
+      gap.appendChild(document.createElement('br'));
+      wrap.appendChild(gap);
+    }
+    body.prepend(wrap);
+    body.focus();
+    const sel = window.getSelection();
+    const r = document.createRange();
+    r.selectNodeContents(wrap.lastChild && rest ? wrap.children[wrap.children.length - 2] || wrap : wrap);
+    r.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    body.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+    gmailDrafts.set(body, text);
+  }
+
+  function gmailBodyText(body) {
+    const clone = body.cloneNode(true);
+    clone.querySelectorAll('.gmail_signature, .gmail_quote, .gmail_extra, [data-smartmail]').forEach(n => n.remove());
+    return norm(clone.textContent);
+  }
+
+  // Draft for the compose window `btn` belongs to. auto: only the thank-you.
+  async function gmailDraft(body, { auto = false } = {}) {
+    const conv = gmailConversation();
+    if (!conv.messages.length) {
+      if (!auto) showDMToast('Open an email thread and click Reply to draft a reply.', 'error');
+      return null;
+    }
+    const profile = await getActiveProfile();
+    const details = await getMyDetails(conv);
+    const meta = {};
+    const reply = generateResponse(profile, conv, { tone: currentTone, details, meta, channel: 'email' });
+    if (auto && meta.intent !== 'thankyou') return meta;
+    if (meta.noReply || !reply) {
+      if (!auto) showDMToast(conv.lastFromMe ? 'No reply needed: you sent the last email.' : 'No reply needed: this looks like an automated email.', 'success');
+      return meta;
+    }
+    gmailInsert(body, reply);
+    const gaps = findPlaceholders(reply);
+    if (meta.language) showDMToast(`${firstNameOf(conv.partnerName) || 'They'} wrote in ${meta.language}. This draft is in English, so translate it before sending.`, 'error');
+    else if (gaps.length) showDMToast(`Fill in ${gaps.join(', ')} before sending.`, 'error');
+    else if (meta.intent === 'thankyou') showDMToast('Drafted your interview thank-you. Review it, then press Send.', 'success');
+    return meta;
+  }
+
+  function createGmailControls(body) {
+    const group = document.createElement('span');
+    group.className = CONTROLS_CLASS;
+    group.style.marginLeft = '8px';
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = AI_BTN_CLASS;
+    btn.innerHTML = '<span style="display:inline-flex">✨</span><span>AI Reply</span>';
+    btn.title = 'Draft a reply to this email thread';
+    btn.addEventListener('click', async e => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (btn.dataset.busy === '1') return;
+      setBusy(btn, true, 'Drafting...');
+      try { await gmailDraft(body); } catch (err) {
+        console.error('[OutreachPro Gmail] Draft error:', err);
+        showDMToast('Could not generate reply. Try again.', 'error');
+      } finally { setBusy(btn, false); }
+    });
+
+    const select = document.createElement('select');
+    select.className = TONE_SELECT_CLASS;
+    select.title = 'Reply tone';
+    for (const [value, label] of Object.entries(TONES)) {
+      const o = document.createElement('option');
+      o.value = value;
+      o.textContent = label;
+      select.appendChild(o);
+    }
+    select.value = currentTone;
+    ['click', 'mousedown', 'keydown'].forEach(ev => select.addEventListener(ev, e => e.stopPropagation()));
+    select.addEventListener('change', async () => {
+      currentTone = TONES[select.value] ? select.value : 'professional';
+      storageSet({ [TONE_KEY]: currentTone });
+      document.querySelectorAll('select.' + TONE_SELECT_CLASS).forEach(s => { s.value = currentTone; });
+      // Redo our draft in the new tone unless it has been edited.
+      const draft = body.querySelector('.outreach-dm-draft');
+      if (draft && norm(draft.textContent) === norm((gmailDrafts.get(body) || '').replace(/\n/g, ' '))) {
+        btn.click();
+      } else {
+        showDMToast(`Tone: ${TONES[currentTone]}`, 'success');
+      }
+    });
+
+    group.append(btn, select);
+    return group;
+  }
+
+  function gmailInject() {
+    for (const body of document.querySelectorAll(GMAIL_BODY_SEL)) {
+      if (!isVisible(body)) continue;
+      const found = gmailSendFor(body);
+      if (!found) continue;
+      const { send, unit } = found;
+      if (!unit.querySelector('.' + CONTROLS_CLASS)) {
+        unit.setAttribute(GMAIL_UNIT_ATTR, '1');
+        const group = createGmailControls(body);
+        const td = send.closest('td');
+        if (td && td.parentElement && td.parentElement.tagName === 'TR') {
+          const cell = document.createElement('td');
+          cell.appendChild(group);
+          td.after(cell);
+        } else {
+          (send.parentElement || send).after(group);
+        }
+      }
+      // A reply window just opened on a thread whose interview is over →
+      // draft the thank-you straight away (only into an empty reply).
+      const isReply = !!document.querySelector('h2.hP') && !(unit.querySelector('input[name="subjectbox"]') && isVisible(unit.querySelector('input[name="subjectbox"]')));
+      if (isReply && !gmailSeen.has(body)) {
+        gmailSeen.add(body);
+        if (!gmailBodyText(body)) gmailDraft(body, { auto: true }).catch(() => {});
+      }
+    }
+  }
+
+  function initGmail() {
+    if (window.__outreachDmInit) return;
+    window.__outreachDmInit = true;
+    injectDMStyles();
+    loadTone().then(t => document.querySelectorAll('select.' + TONE_SELECT_CLASS).forEach(s => { s.value = t; }));
+    let timer = null;
+    new MutationObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(gmailInject, 300);
+    }).observe(document.body, { childList: true, subtree: true });
+    setTimeout(gmailInject, 300);
+    setInterval(gmailInject, 2500);
+  }
+
+  // The top LinkedIn window, when this frame may read it (same origin).
+  function topWindow() {
+    try {
+      if (window.top && window.top !== window && window.top.location.hostname) return window.top;
+    } catch (e) { /* cross-origin frame */ }
+    return null;
+  }
+
   function init() {
-    if (!location.hostname.includes('linkedin.com')) return;
+    // Runs in every LinkedIn frame (manifest all_frames): LinkedIn now
+    // renders the messaging page and chat bubbles inside a same-origin
+    // iframe (/preload/?_bprMode=vanilla) that a top-frame-only script
+    // can't see. about:blank / srcdoc frames have no hostname of their
+    // own, so check the top window's.
+    const top = topWindow();
+    const host = location.hostname || (top ? top.location.hostname : '');
+    if (host === 'mail.google.com') {
+      if (window === window.top) initGmail();
+      return;
+    }
+    if (!host.includes('linkedin.com')) return;
+    // Guard against a second init in the same frame.
+    if (window.__outreachDmInit) return;
+    window.__outreachDmInit = true;
     log('🚀 Initializing AI DM Response Generator v2');
     injectDMStyles();
     attachActiveScopeTracking();
+    loadTone().then(t => deepQueryAll('select.' + TONE_SELECT_CLASS).forEach(s => { s.value = t; }));
+    try {
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area !== 'local' || !changes[TONE_KEY]) return;
+        const t = changes[TONE_KEY].newValue;
+        if (!TONES[t]) return;
+        currentTone = t;
+        deepQueryAll('select.' + TONE_SELECT_CLASS).forEach(s => { s.value = t; });
+      });
+    } catch (e) { /* storage events unavailable */ }
 
     // First pass right away (chats may already be open, including inside
     // shadow roots), then a few retries while LinkedIn finishes loading.
@@ -2423,10 +3849,16 @@
     setInterval(injectAIReplyButton, 3000);
 
     // Watch URL changes (LinkedIn is an SPA)
-    lastMsgUrl = location.href;
+    // Inside the messaging iframe our own URL never changes; the thread URL
+    // lives on the top window. Watch both.
+    const currentUrl = () => {
+      const t = topWindow();
+      return location.href + '|' + (t ? t.location.href : '');
+    };
+    lastMsgUrl = currentUrl();
     setInterval(() => {
-      if (location.href !== lastMsgUrl) {
-        lastMsgUrl = location.href;
+      if (currentUrl() !== lastMsgUrl) {
+        lastMsgUrl = currentUrl();
         // Drop any stale composer reference from the previous page/conv.
         lastActiveComposer = null;
         // The panel was built for the previous conversation — close it.

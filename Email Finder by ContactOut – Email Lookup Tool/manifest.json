@@ -107,7 +107,14 @@
       ],
       "js": ["/app/dm_response_generator.js"],
       "css": [],
-      "run_at": "document_end"
+      "run_at": "document_end",
+      "all_frames": true,
+      "match_about_blank": true
+    },
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["/app/dm_response_generator.js"],
+      "run_at": "document_idle"
     },
     {
       "matches": [
