@@ -380,7 +380,7 @@
   // 2. Profile Data Scraping (IMPROVED with multiple fallbacks)
   // ===================================================================
   function scrapeProfile() {
-    const d = { name: '', headline: '', company: '', location: '', about: '', profileUrl: location.href, email: '' };
+    const d = { name: '', headline: '', company: '', location: '', about: '', profileUrl: location.href, email: '', degree: '', pending: false };
 
     // Scope to main content to avoid picking up sidebar names
     const mainContent = document.querySelector('.scaffold-layout__main, main') || document.body;
@@ -475,6 +475,43 @@
       }
     }
 
+    // ─── Class-free fallbacks: LinkedIn renames its classes, so read the top
+    // card's visible text ("Bill Gates", "· 3rd", headline, location…). ───
+    const block = profileTopBlock(d.name);
+    const lines = block ? readLines(block) : [];
+    const nameIdx = d.name ? lines.findIndex(l => l.startsWith(d.name)) : -1;
+    const isChrome = l => /^[·•]?\s*(1st|2nd|3rd\+?)$|^\((?:she|he|they)\/[^)]*\)|contact info|followers|connections\b|^(follow|following|connect|message|more|pending|view my newsletter|ai powered|connect with ai message)$|profile enhanced|followed by|mutual|^https?:\/\//i.test(l);
+    if (nameIdx >= 0) {
+      const near = lines.slice(nameIdx, nameIdx + 8);
+      const deg = near.join(' ').match(/[·•]\s*(1st|2nd|3rd\+?)\b/i);
+      if (deg) d.degree = deg[1].toLowerCase();
+      if (!d.headline) {
+        for (let i = nameIdx + 1; i < Math.min(lines.length, nameIdx + 6); i++) {
+          const l = lines[i];
+          if (isChrome(l) || l.length < 6 || l.startsWith(d.name)) continue;
+          d.headline = l;
+          break;
+        }
+      }
+      if (!d.location) {
+        const loc = near.find(l => /contact info/i.test(l));
+        if (loc) d.location = loc.replace(/[·•]?\s*contact info.*$/i, '').trim();
+      }
+    }
+    if (d.headline && !d.company) {
+      const at = d.headline.match(/\s(?:at|@)\s+([^|•·,]+)/i);
+      if (at) d.company = at[1].trim();
+    }
+    if (!d.about) {
+      const heading = [...mainContent.querySelectorAll('h2, h3, [role="heading"]')].find(h => /^about$/i.test((h.innerText || h.textContent || '').trim()));
+      const sec = heading && (heading.closest('section') || heading.parentElement && heading.parentElement.parentElement);
+      if (sec) d.about = readLines(sec).filter(l => !/^about$/i.test(l) && !/^…?\s*see more$/i.test(l)).join(' ').substring(0, 500);
+    }
+    // Invitation already sent / already connected?
+    const actionTexts = block ? [...block.querySelectorAll('button, a, [role="button"]')]
+      .filter(el => !el.closest('.' + WRAPPER_CLASS)).map(el => ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '')).trim()) : [];
+    d.pending = actionTexts.some(t => /\bpending\b/i.test(t));
+
     // Try to grab email from ContactOut sidebar if visible
     const emailEl = document.querySelector('[data-email], .contactout-email, a[href^="mailto:"]');
     if (emailEl) {
@@ -483,6 +520,27 @@
 
     console.log('[OutreachPro] Scraped profile:', d.name, '|', d.headline, '|', d.email);
     return d;
+  }
+
+  function readLines(el) {
+    return ((el && (el.innerText || el.textContent)) || '').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  }
+
+  // The profile's top card, found from the name / our own button upwards:
+  // the smallest block holding the name plus the action buttons.
+  function profileTopBlock(name) {
+    const main = document.querySelector('.scaffold-layout__main, main') || document.body;
+    const starts = [document.querySelector('.' + WRAPPER_CLASS), main.querySelector('h1')].filter(Boolean);
+    for (const start of starts) {
+      let cur = start;
+      for (let i = 0; cur && cur !== document.body && i < 10; i++, cur = cur.parentElement) {
+        const t = cur.innerText || '';
+        const hasName = name ? t.includes(name) : true;
+        const hasActions = cur.querySelectorAll('button, a[role="button"], a[aria-label]').length >= 2;
+        if (hasName && hasActions && readLines(cur).length >= 4) return cur;
+      }
+    }
+    return null;
   }
 
   // ===================================================================
@@ -659,7 +717,7 @@
         <button class="op-close" id="op-close">&times;</button>
         <div class="op-name">${esc(name)}</div>
         ${hl ? '<div class="op-headline">' + esc(hl) + '</div>' : ''}
-        <div class="op-unlimited"><span>&infin;</span> Unlimited - No limits, no tokens</div>
+
       </div>
       <div class="op-tabs">
         <button class="op-tab active" data-t="connection_request">🤝 Connection</button>
@@ -669,9 +727,9 @@
       </div>
       <div class="op-tones">
         <button class="op-tone active" data-tone="professional">Professional</button>
+        <button class="op-tone" data-tone="friendly">Friendly</button>
         <button class="op-tone" data-tone="casual">Casual</button>
-        <button class="op-tone" data-tone="enthusiastic">Enthusiastic</button>
-        <button class="op-tone" data-tone="witty">Witty</button>
+        <button class="op-tone" data-tone="direct">Direct</button>
       </div>
       <div class="op-msg-area">
         <div id="op-skel"><div class="op-skel l"></div><div class="op-skel m"></div><div class="op-skel l"></div><div class="op-skel s"></div></div>
@@ -689,10 +747,11 @@
       <div class="op-cv-prompt" id="op-cv-prompt">
         <span style="display:flex;gap:16px;align-items:center;width:100%;">
           <span style="display:flex;align-items:center;gap:6px;">📄 <a id="op-cv-link">Upload CV</a></span>
+          <span style="display:flex;align-items:center;gap:6px;">👤 <a id="op-details-link">My details</a></span>
           <span style="display:flex;align-items:center;gap:6px;">⚙️ <a id="op-settings-link">Settings & Signature</a></span>
         </span>
       </div>
-      <div class="op-footer">Powered by <span class="op-hl">OutreachPro</span> - <span class="op-hl">&infin; Unlimited</span> messages</div>
+      <div class="op-footer">OutreachPro · the note is sent only after you click Send invite</div>
     `;
 
     document.body.appendChild(panel);
@@ -730,15 +789,35 @@
         if (cv.summary || cv.skills || cv.experience || cv.cvFileName) {
           const prompt = panel.querySelector('#op-cv-prompt');
           if (prompt) {
+            const details = '<span style="display:flex;align-items:center;gap:6px;margin-left:auto;">👤 <a id="op-details-link">My details</a></span>';
             if (cv.cvFileName) {
-              prompt.innerHTML = `<span>📄</span><span>CV loaded: <strong>${esc(cv.cvFileName)}</strong> <a id="op-cv-link" style="margin-left:6px;">Change</a></span>`;
+              prompt.innerHTML = `<span style="display:flex;gap:16px;align-items:center;width:100%;"><span>📄 CV loaded: <strong>${esc(cv.cvFileName)}</strong> <a id="op-cv-link" style="margin-left:6px;">Change</a></span>${details}</span>`;
             } else {
-              prompt.style.display = 'none';
+              prompt.innerHTML = `<span style="display:flex;gap:16px;align-items:center;width:100%;">${details}</span>`;
             }
           }
         }
       }
     } catch (e) {}
+
+    // My details (shared with AI Reply): role, years, what I'm looking for.
+    const store = key => new Promise(res => {
+      try {
+        const out = chrome.storage.local.get(key, r => res((r && r[key]) || null));
+        if (out && typeof out.then === 'function') out.then(r => res((r && r[key]) || null)).catch(() => res(null));
+      } catch (e) { res(null); }
+    });
+    async function loadMe() {
+    const manual = (await store('outreach_dm_my_details')) || {};
+    const auto = (await store('outreach_dm_my_details_auto')) || {};
+    const pickVal = k => (manual[k] && String(manual[k]).trim()) || auto[k] || '';
+    cv.me = {
+      currentRole: pickVal('currentRole') || (cv.summary && (cv.summary.match(/\b(?:I(?:'m| am) an? )?((?:Senior |Lead |Principal |Staff )?[A-Z][\w/+-]*(?: [A-Z][\w/+-]*){0,3} (?:Engineer|Developer|Architect|Manager|Designer|Scientist|Analyst|Consultant))\b/) || [])[1]) || '',
+      years: pickVal('years') || ((cv.summary || '').match(/\b(\d{1,2})\+?\s+years/) || [])[1] || '',
+      lookingFor: pickVal('lookingFor'),
+    };
+    }
+    await loadMe();
 
     // Also load signature from settings
     try {
@@ -797,6 +876,7 @@
         // Show Insert for connection/DM, Send Email for email tab
         if (type === 'connection_request' || type === 'direct_message') {
           insertBtn.style.display = 'inline-flex';
+          insertBtn.textContent = type === 'connection_request' ? '➤ Send invite' : '➤ Send message';
           sendEmailBtn.style.display = 'none';
         } else if (type === 'email') {
           insertBtn.style.display = 'none';
@@ -845,7 +925,7 @@
     // Insert into LinkedIn (connection/DM)
     insertBtn.onclick = () => {
       if (type === 'connection_request') {
-        insertConnectionRequest(textarea.value);
+        sendConnectionRequest(textarea.value, profile, insertBtn);
       } else {
         insertDirectMessage(textarea.value);
       }
@@ -882,6 +962,19 @@
       };
     }
 
+    // My details (shared with AI Reply): role, what I'm looking for, …
+    const detailsLink = panel.querySelector('#op-details-link');
+    if (detailsLink) {
+      detailsLink.onclick = (e) => {
+        e.preventDefault();
+        if (typeof window.__outreachOpenMyDetails === 'function') {
+          window.__outreachOpenMyDetails(async () => { await loadMe(); doGenerate(); });
+        } else {
+          showToast('My details is still loading. Try again in a moment.', 'error');
+        }
+      };
+    }
+
     // Settings link
     const settingsLink = panel.querySelector('#op-settings-link');
     if (settingsLink) {
@@ -906,7 +999,8 @@
     toast.className = 'op-toast' + (type ? ' ' + type : '');
     toast.textContent = msg;
     document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 3000);
+    // Errors explain what to do next, so they stay up long enough to read.
+    setTimeout(() => toast.remove(), type === 'error' ? 7000 : 3500);
   }
 
   /**
@@ -957,6 +1051,7 @@
       for (const btn of btns) {
         // Double-check: make sure this button is NOT inside a "People also viewed" or "People you may know" section
         if (isInsideRecommendationSection(btn)) continue;
+        if (btn.closest('.' + WRAPPER_CLASS)) continue; // never our own button
         console.log('[OutreachPro] Found profile button via selector:', sel, btn.textContent.trim());
         return btn;
       }
@@ -966,6 +1061,7 @@
     const allButtons = profileCard.querySelectorAll('button, a[role="button"]');
     for (const btn of allButtons) {
       if (isInsideRecommendationSection(btn)) continue;
+      if (btn.closest('.' + WRAPPER_CLASS)) continue; // never our own button
       const text = btn.textContent.trim().toLowerCase();
       for (const match of textMatches) {
         if (text === match.toLowerCase() || text.includes(match.toLowerCase())) {
@@ -1065,118 +1161,195 @@
     return null;
   }
 
-  function insertConnectionRequest(text) {
-    // Find the Connect button ONLY in the top profile card
-    const connectBtn = findProfileButton(['Connect'], [
-      'button[aria-label*="connect" i]',
-      'button[aria-label*="Connect"]',
-      'button[aria-label*="Invite"]',
-    ]);
+  // ===================================================================
+  // 7a. Send a connection request with the note — for real.
+  //     Finds LinkedIn's own Connect (button, link, or under "More"; never
+  //     ours), the invitation window (also inside shadow roots and
+  //     same-origin frames, where newer LinkedIn renders it), adds the
+  //     note, clicks Send, and only reports success once LinkedIn shows
+  //     the invitation as Pending / sent.
+  // ===================================================================
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const elText = el => ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
+  const elLabel = el => ((el && el.getAttribute && el.getAttribute('aria-label')) || '').trim();
+  const isOurs = el => !!(el && el.closest && el.closest('.' + WRAPPER_CLASS + ', .' + PANEL_CLASS + ', .op-overlay, .op-toast'));
+  const isShown = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
 
-    if (!connectBtn) {
-      showToast('Connect button not found. Try clicking Connect manually.', 'error');
-      navigator.clipboard.writeText(text);
-      return;
-    }
-
-    showToast('Sending connection request...', '');
-    console.log('[OutreachPro] Clicking Connect:', connectBtn.textContent.trim());
-    connectBtn.click();
-
-    // Wait for ANY modal/dialog to appear after clicking Connect
-    retryUntil(() => {
-      // Look for the connect modal by multiple strategies
-      const modal = document.querySelector('.artdeco-modal, [role="dialog"], .send-invite, .artdeco-modal__content');
-      return modal;
-    }, 5000, 200).then(modal => {
-      if (!modal) {
-        navigator.clipboard.writeText(text);
-        showToast('Connection modal did not appear. Message copied to clipboard.', 'error');
-        return;
-      }
-
-      console.log('[OutreachPro] Modal found:', modal.className);
-
-      // Find the "Add a note" button inside the modal - try many selectors
-      retryUntil(() => {
-        // Search by aria-label
-        let btn = modal.querySelector('button[aria-label*="Add a note"], button[aria-label*="add a note"]');
-        if (btn) return btn;
-
-        // Search by button text content
-        const allBtns = modal.querySelectorAll('button');
-        for (const b of allBtns) {
-          const txt = b.textContent.trim().toLowerCase();
-          if (txt.includes('add a note') || txt.includes('add note')) return b;
-        }
-
-        // If there's a secondary button (LinkedIn's "Add a note" is usually the secondary)
-        btn = modal.querySelector('button.artdeco-button--secondary');
-        if (btn && btn.textContent.toLowerCase().includes('note')) return btn;
-
-        // Try any secondary button in the modal
-        const secondaryBtns = modal.querySelectorAll('button.artdeco-button--secondary, button.artdeco-button--muted');
-        for (const b of secondaryBtns) {
-          if (!b.textContent.toLowerCase().includes('send')) return b;
-        }
-
-        return null;
-      }, 3000, 200).then(addNoteBtn => {
-        if (addNoteBtn) {
-          console.log('[OutreachPro] Clicking Add a note:', addNoteBtn.textContent.trim());
-          addNoteBtn.click();
-
-          // Wait for textarea to appear in the modal
-          retryUntil(() => {
-            return document.querySelector(
-              '.artdeco-modal textarea, ' +
-              '[role="dialog"] textarea, ' +
-              '.send-invite textarea, ' +
-              'textarea[name="message"], ' +
-              'textarea#custom-message, ' +
-              '.send-invite__custom-message, ' +
-              'textarea.connect-button-send-invite__custom-message, ' +
-              '.artdeco-modal__content textarea'
-            );
-          }, 3000, 200).then(ta => {
-            if (ta) {
-              setNativeValue(ta, text);
-              console.log('[OutreachPro] Message filled in textarea');
-
-              // NOW auto-click the Send button to complete the flow
-              setTimeout(() => {
-                const sendBtn = findSendButtonInModal();
-                if (sendBtn) {
-                  console.log('[OutreachPro] Auto-clicking Send:', sendBtn.textContent.trim());
-                  sendBtn.click();
-                  showToast('Connection request sent with your message!', 'success');
-                } else {
-                  showToast('Message filled! Click Send to complete.', 'success');
-                }
-              }, 500);
-            } else {
-              navigator.clipboard.writeText(text);
-              showToast('Message copied. Paste it in the note field and click Send.', 'success');
-            }
-          });
-        } else {
-          // No "Add a note" - maybe it's a direct send modal
-          // Try to find a textarea directly
-          const ta = modal.querySelector('textarea');
-          if (ta) {
-            setNativeValue(ta, text);
-            setTimeout(() => {
-              const sendBtn = findSendButtonInModal();
-              if (sendBtn) { sendBtn.click(); showToast('Connection request sent!', 'success'); }
-              else { showToast('Message filled! Click Send.', 'success'); }
-            }, 500);
-          } else {
-            navigator.clipboard.writeText(text);
-            showToast('Message copied to clipboard. Add a note and paste.', 'success');
-          }
+  // The page, open shadow roots and same-origin frames.
+  function allRoots() {
+    const roots = [document];
+    const seen = new Set([document]);
+    for (let i = 0; i < roots.length; i++) {
+      const root = roots[i];
+      root.querySelectorAll('*').forEach(el => {
+        if (el.shadowRoot && !seen.has(el.shadowRoot)) { seen.add(el.shadowRoot); roots.push(el.shadowRoot); }
+        if (el.tagName === 'IFRAME') {
+          try {
+            const doc = el.contentDocument;
+            if (doc && doc.body && !seen.has(doc)) { seen.add(doc); roots.push(doc); }
+          } catch (e) { /* cross-origin frame */ }
         }
       });
-    });
+    }
+    return roots;
+  }
+
+  function actionControls(block) {
+    return [...(block || document).querySelectorAll('button, a, [role="button"]')]
+      .filter(el => !isOurs(el) && !isInsideRecommendationSection(el) && isShown(el));
+  }
+
+  function isConnectControl(el) {
+    const label = elLabel(el);
+    const text = elText(el).toLowerCase();
+    return /^invite .+ to connect$/i.test(label) || text === 'connect' ||
+      (/\bconnect\b/i.test(label) && !/disconnect|with ai/i.test(label));
+  }
+
+  // LinkedIn's Connect in the top card, or in the "More" menu.
+  async function findConnectControl(block) {
+    const direct = actionControls(block).find(isConnectControl);
+    if (direct) return direct;
+    const more = actionControls(block).find(el => /^more$/i.test(elText(el)) || /more actions/i.test(elLabel(el)));
+    if (!more) return null;
+    more.click();
+    return retryUntil(() => {
+      for (const root of allRoots()) {
+        const items = root.querySelectorAll('[role="menu"] *, .artdeco-dropdown__content *, [role="menuitem"]');
+        for (const it of items) {
+          if (isOurs(it) || !isShown(it)) continue;
+          if (/^invite .+ to connect$/i.test(elLabel(it)) || (elText(it).toLowerCase() === 'connect' && it.matches('[role="button"], [role="menuitem"], button, a, li, div'))) {
+            return it.closest('[role="button"], [role="menuitem"], button, a') || it;
+          }
+        }
+      }
+      return null;
+    }, 3000, 150);
+  }
+
+  // LinkedIn's invitation window, wherever it rendered.
+  function findInviteDialog() {
+    for (const root of allRoots()) {
+      for (const d of root.querySelectorAll('[role="dialog"], .artdeco-modal, .send-invite')) {
+        if (isOurs(d) || !isShown(d)) continue;
+        const t = elText(d).toLowerCase();
+        if (/add a note|send without a note|invitation|how do you know|personali[sz]e|verify this member|enter their email|knows you/.test(t) ||
+            d.querySelector('textarea#custom-message, textarea[name="message"]')) return d;
+      }
+    }
+    return null;
+  }
+
+  function setTextareaValue(ta, value) {
+    const win = (ta.ownerDocument && ta.ownerDocument.defaultView) || window;
+    const setter = Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, 'value').set;
+    ta.focus();
+    setter.call(ta, value);
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    ta.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function copyNote(note) {
+    try { navigator.clipboard.writeText(note).catch(() => {}); } catch (e) { /* ignore */ }
+  }
+
+  async function sendConnectionRequest(note, profile, btn) {
+    const first = (profile.name || '').split(' ')[0] || 'them';
+    note = String(note || '').trim();
+    if (!note) return showToast('Write or generate a note first.', 'error');
+    if (note.length > 300) return showToast(`LinkedIn notes are limited to 300 characters (this one is ${note.length}). Shorten it first.`, 'error');
+
+    const fresh = scrapeProfile();
+    if (fresh.pending || profile.pending) return showToast(`An invitation to ${first} is already pending.`, 'error');
+    if ((fresh.degree || profile.degree) === '1st') return showToast(`You're already connected with ${first}. Use the DM tab to message them.`, 'error');
+
+    const label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Sending...'; }
+    const done = (msg, type) => {
+      if (btn) { btn.disabled = false; btn.textContent = label; }
+      showToast(msg, type);
+    };
+
+    try {
+      showToast(`Opening LinkedIn's invitation for ${first}...`, '');
+      const block = profileTopBlock(profile.name) || getTopProfileCard();
+      const connect = await findConnectControl(block);
+      if (!connect) {
+        copyNote(note);
+        return done(`Couldn't find a Connect option on ${first}'s profile (some people only allow Follow). Your note is copied.`, 'error');
+      }
+      connect.click();
+
+      let dialog = await retryUntil(findInviteDialog, 6000, 200);
+      if (!dialog) {
+        copyNote(note);
+        return done("LinkedIn's invitation window didn't open. Your note is copied; click Connect and paste it.", 'error');
+      }
+      if (dialog.querySelector('input[type="email"], input[name="email"]')) {
+        copyNote(note);
+        return done(`LinkedIn needs ${first}'s email address to send this invitation. Your note is copied.`, 'error');
+      }
+
+      // "Add a note" → the note box
+      let ta = dialog.querySelector('textarea');
+      if (!ta) {
+        const add = actionControls(dialog).find(b => /add a note/i.test(elText(b) + ' ' + elLabel(b)));
+        if (add) add.click();
+        // The note box — or LinkedIn's "no notes left this month" message.
+        ta = await retryUntil(() => {
+          const d = findInviteDialog() || dialog;
+          const box = d.querySelector('textarea');
+          if (box) return box;
+          return /personali[sz]ed invitations|used all|monthly limit|upgrade to premium/i.test(elText(d)) ? 'limit' : null;
+        }, 4000, 150);
+        if (ta === 'limit') ta = null;
+      }
+      dialog = findInviteDialog() || dialog;
+      if (!ta) {
+        copyNote(note);
+        const t = elText(dialog).toLowerCase();
+        if (/personali[sz]ed invitations|used all|monthly|limit|upgrade|premium/.test(t)) {
+          return done("You've reached LinkedIn's limit for invitation notes this month. Your note is copied; you can still send without a note from LinkedIn's window.", 'error');
+        }
+        return done("Couldn't find the note box in LinkedIn's invitation window. Your note is copied.", 'error');
+      }
+      const max = ta.maxLength > 0 ? ta.maxLength : 300;
+      if (note.length > max) {
+        copyNote(note);
+        return done(`LinkedIn allows ${max} characters in this note and yours is ${note.length}. Shorten it and try again.`, 'error');
+      }
+
+      setTextareaValue(ta, note);
+      await sleep(250);
+      if (ta.value !== note) {
+        copyNote(note);
+        return done("LinkedIn didn't accept the note text. Your note is copied; paste it and press Send.", 'error');
+      }
+
+      const send = await retryUntil(() => {
+        const d = findInviteDialog() || dialog;
+        return [...d.querySelectorAll('button')].find(b => !b.disabled && b.getAttribute('aria-disabled') !== 'true' &&
+          (/^send( invitation| now)?$/i.test(elText(b)) || /^send (invitation|now)\b/i.test(elLabel(b))));
+      }, 3000, 150);
+      if (!send) return done("The note is filled in, but LinkedIn's Send button wasn't available. Press Send in LinkedIn's window.", 'error');
+      send.click();
+
+      // Confirmed = window closed and the profile shows Pending (or LinkedIn's "sent" toast).
+      const confirmed = await retryUntil(() => {
+        const pending = actionControls(profileTopBlock(profile.name) || getTopProfileCard())
+          .some(b => /\bpending\b/i.test(elText(b) + ' ' + elLabel(b)));
+        const sentToast = allRoots().some(r => [...r.querySelectorAll('[role="alert"], .artdeco-toast-item, [data-test-artdeco-toast-item-type]')]
+          .some(t => /invitation sent|request sent/i.test(elText(t))));
+        return (pending || sentToast) ? true : null;
+      }, 6000, 250);
+      if (confirmed) return done(`✅ Invitation sent to ${first} with your note.`, 'success');
+      if (!findInviteDialog()) return done(`Send was clicked, but LinkedIn hasn't confirmed yet. Check that ${first}'s profile shows Pending.`, 'error');
+      return done("LinkedIn didn't accept the invitation. Check its window for a message.", 'error');
+    } catch (err) {
+      console.error('[OutreachPro] Connect error:', err);
+      copyNote(note);
+      return done('Something went wrong sending the invitation. Your note is copied.', 'error');
+    }
   }
 
   /**

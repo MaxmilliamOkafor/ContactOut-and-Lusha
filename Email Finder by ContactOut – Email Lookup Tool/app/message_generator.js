@@ -222,65 +222,118 @@ const OutreachMessageGenerator = (() => {
 
   // --- Message Generators ---
 
-  /**
-   * Connection Request (max ~300 chars for LinkedIn)
-   */
-  function generateConnectionRequest(prospectData, userCV, tone = 'professional') {
-    const t = TONES[tone] || TONES.professional;
-    const prospectIndustry = extractIndustry(prospectData.headline, prospectData.about);
-    const userSkills = userCV.skills ? userCV.skills.split(',')[0].trim() : '';
-    const userIndustry = extractIndustry(userCV.summary, userCV.experience);
-    const commonGround = findCommonGround(userCV, prospectData);
+  // --- Connection note helpers ---
 
-    const vars = {
-      company: prospectData.company,
-      industry: prospectIndustry,
-      prospectArea: prospectData.headline ? prospectData.headline.split(' at ')[0].split(' | ')[0].trim() : prospectIndustry,
-      userSkill: userSkills || userIndustry || 'my expertise',
-      userIndustry: userIndustry || 'the industry',
-      prospectName: firstName(prospectData.name),
-      userName: userCV.name || '',
-    };
-
-    // Build specific detail reference
-    let detail = '';
-    if (prospectData.company) {
-      detail = `your work at ${prospectData.company}`;
-    } else if (prospectData.headline) {
-      detail = prospectData.headline.split(' at ')[0].split(' | ')[0].trim().toLowerCase();
-    } else {
-      detail = 'your professional background';
+  // "Chair, Gates Foundation and Founder, Breakthrough Energy"
+  //   → { role: 'Chair', orgs: ['Gates Foundation', 'Breakthrough Energy'] }
+  // "Senior Talent Acquisition Partner at Optum Ireland"
+  //   → { role: 'Senior Talent Acquisition Partner', orgs: ['Optum Ireland'] }
+  function parseHeadline(headline) {
+    const out = { role: '', orgs: [] };
+    const first = String(headline || '').split(/\s+[|•·]\s+|\s*\|\s*/)[0].trim();
+    if (!first) return out;
+    const at = first.match(/^(.*?)\s+(?:at|@)\s+(.+)$/i);
+    if (at) {
+      out.role = at[1].trim();
+      out.orgs = [at[2].replace(/[.,;]+$/, '').trim()];
+      return out;
     }
-
-    // Common ground bonus
-    let commonNote = '';
-    if (commonGround.length > 0) {
-      const cg = commonGround[0];
-      if (cg.type === 'skill') {
-        commonNote = ` As a fellow ${cg.value} professional,`;
-      } else if (cg.type === 'industry') {
-        commonNote = ` We are both in ${cg.value},`;
+    for (const part of first.split(/\s+and\s+|;\s*/)) {
+      const m = part.match(/^([^,]+),\s*(.+)$/);
+      if (m) {
+        if (!out.role) out.role = m[1].trim();
+        out.orgs.push(m[2].replace(/[.,;]+$/, '').trim());
       }
     }
+    if (!out.orgs.length) out.role = first;
+    return out;
+  }
 
-    const greeting = buildGreeting(prospectData.name, t.greeting);
-    const opener = fillPlaceholders(pick(t.opener), vars) + ` ${detail} is impressive.`;
-    const bridge = commonNote ? commonNote + ' ' + fillPlaceholders(pick(t.closer), vars) : fillPlaceholders(pick(t.closer), vars);
+  const joinAnd = items => items.length < 2 ? (items[0] || '') : items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1];
 
-    let message = `${greeting} ${opener} ${bridge}`;
+  // Different people get different wording; Regenerate moves to the next.
+  const regenCount = new Map();
+  function variantFor(key, n) {
+    let h = 0;
+    for (const c of String(key || '')) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    const k = String(key || '');
+    const c = regenCount.get(k) || 0;
+    regenCount.set(k, c + 1);
+    return (h + c) % n;
+  }
 
-    // Enforce LinkedIn 300 char limit
-    if (message.length > 295) {
-      message = `${greeting} ${fillPlaceholders(pick(t.opener), vars)} ${detail} is impressive. ${fillPlaceholders(pick(t.closer), vars)}`;
+  // "Gates Foundation" → "the Gates Foundation"; "Stripe" stays "Stripe".
+  function withArticle(org) {
+    if (/^the\s/i.test(org)) return org;
+    return /\b(foundation|institute|university|trust|council|department|ministry|society|academy|agency|commission|group of)\b/i.test(org) ? 'the ' + org : org;
+  }
+  const aOrAn = w => (/^[aeiou]/i.test(w) ? 'an ' : 'a ') + w;
+
+  /**
+   * Connection note (LinkedIn allows 300 characters).
+   * Built from their headline (organisations, role) and my own details
+   * (role, years, what I'm looking for). Each version is a lead plus a
+   * closing sentence written for the chosen tone, so grammar holds.
+   */
+  function generateConnectionRequest(prospectData, userCV, tone = 'professional') {
+    const first = firstName(prospectData.name) || '';
+    const hi = tone === 'casual' ? `Hey ${first},` : `Hi ${first},`;
+    const me = userCV.me || {};
+    const myRole = me.currentRole || '';
+    const years = me.years ? ` with ${me.years} years' experience` : '';
+    const seeking = me.lookingFor || '';
+    const hl = parseHeadline(prospectData.headline);
+    const orgList = (hl.orgs.length ? hl.orgs : (prospectData.company ? [prospectData.company] : [])).slice(0, 2).map(withArticle);
+    const orgs = joinAnd(orgList);
+    const at = orgs ? ` at ${orgs}` : '';
+    const headline = String(prospectData.headline || '');
+    const audience = /talent|recruit|sourc|hiring|headhunt|resourcing|people partner/i.test(headline) ? 'recruiter'
+      : /engineer|engineering|\bcto\b|architect|developer|platform|backend|software|devops|tech lead|technology/i.test(headline) ? 'tech'
+      : 'other';
+    const iAm = myRole ? `I'm ${aOrAn(myRole)}` : '';
+    const close = {
+      professional: ["I'd welcome connecting", "I'd be glad to connect"],
+      friendly: ['It would be great to connect'],
+      casual: ['Happy to connect'],
+    };
+
+    // [lead, tail]: note = lead + closing sentence + tail
+    let options;
+    if (audience === 'recruiter') {
+      const fit = ` in case there's a fit with roles you're working on${at}`;
+      options = seeking ? [
+        [`${iAm ? iAm + years + ', currently exploring' : "I'm currently exploring"} ${seeking}.`, fit],
+        [`I'm exploring ${seeking} and came across your work in talent acquisition${at}.${iAm ? ' ' + iAm + years + '.' : ''}`, ''],
+      ] : [[iAm ? `${iAm}${years}.` : '', fit]];
+    } else if (audience === 'tech') {
+      options = [
+        [`${iAm ? iAm + (seeking ? ' exploring ' + seeking : '') + '. ' : ''}Your work${hl.role ? ' as ' + aOrAn(hl.role) : ''}${at} caught my attention.`, ''],
+        [`I came across your profile${orgs ? ' while looking into ' + orgs : ''}.${iAm ? ' ' + iAm + years + '.' : ''}`, ''],
+        [`${orgs ? 'The work at ' + orgs + ' stood out to me.' : 'Your work stood out to me.'}${iAm ? ' ' + iAm + years + '.' : ''}`, ''],
+      ];
+    } else {
+      options = [
+        [`I came across your profile and your work${orgs ? ' with ' + orgs : ''} stood out.${iAm ? ' ' + iAm + '.' : ''}`, ''],
+      ];
+      if (orgs) options.push([`your work with ${orgs} stands out, and I'd like to follow it more closely.${iAm ? ' ' + iAm + '.' : ''}`, '']);
     }
-    if (message.length > 295) {
-      message = `${greeting} ${fillPlaceholders(pick(t.opener), vars)} ${detail}. ${fillPlaceholders(pick(t.closer), vars)}`;
-    }
-    if (message.length > 295) {
-      message = message.substring(0, 292) + '...';
-    }
 
-    message = sanitize(message);
+    const idx = variantFor('connect:' + prospectData.name, options.length);
+    let body;
+    if (tone === 'direct') {
+      body = `${iAm ? iAm + (seeking ? ' exploring ' + seeking : '') + '. ' : ''}Would you be open to connecting?`;
+    } else {
+      const [lead, tail] = options[idx];
+      const closers = close[tone] || close.professional;
+      body = `${lead} ${closers[idx % closers.length]}${tail}.`.trim();
+    }
+    // "Hi Bill, your work…" but "Hi Bill, I'm…"
+    if (!/^I\b|^I'/.test(body)) body = body.charAt(0).toLowerCase() + body.slice(1);
+
+    let message = sanitize(`${hi} ${body}`).replace(/\s+([,.])/g, '$1').replace(/\.{2,}/g, '.');
+    // Stay within LinkedIn's 300 characters.
+    if (message.length > 300 && years) message = message.split(years).join('');
+    if (message.length > 300) message = sanitize(`${hi} ${iAm ? iAm + '. ' : ''}I'd welcome connecting.`);
     return { type: 'connection_request', message, charCount: message.length, limit: 300 };
   }
 
@@ -424,9 +477,8 @@ const OutreachMessageGenerator = (() => {
 
     const openers = [
       `I wanted to follow up on my earlier message.`,
-      `Just circling back on my previous note.`,
-      `Hope you have been well since my last message!`,
-      `I know your inbox is probably busy, so I wanted to send a quick follow-up.`,
+      `Following up on my previous note.`,
+      `I appreciate you're busy, so I'll keep this brief.`,
     ];
 
     const bodies = [
