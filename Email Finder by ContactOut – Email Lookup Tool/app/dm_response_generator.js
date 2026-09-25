@@ -622,7 +622,7 @@
   // box with a "Send" button next to it.
   const UNIT_ATTR = 'data-outreach-dm-unit';
   // Editors that are not chats: feed posts/comments, invitation notes, search.
-  const NOT_A_CHAT = /comment|post|share your thoughts|what do you want to talk about|add a note|search/i;
+  const NOT_A_CHAT = /comment|post|share your thoughts|what do you want to talk about|add a note|search|we know each other|invitation/i;
 
   function isVisible(el) {
     const r = el.getBoundingClientRect();
@@ -641,6 +641,10 @@
     const out = [];
     for (const ed of deepQueryAll('[contenteditable="true"], textarea')) {
       if (!isVisible(ed) || ed.closest('#' + PANEL_ID)) continue;
+      // LinkedIn's invitation window (note box + Send) is not a chat.
+      if (ed.id === 'custom-message') continue;
+      const dlg = ed.closest('[role="dialog"], .artdeco-modal, .send-invite');
+      if (dlg && /invitation|add a note|how do you know|send without a note/i.test(dlg.innerText || '')) continue;
       if (ed.parentElement && ed.parentElement.closest('[contenteditable="true"]')) continue; // inner node of an editor
       const label = ['aria-label', 'aria-placeholder', 'data-placeholder', 'placeholder']
         .map(a => ed.getAttribute(a) || '').join(' ');

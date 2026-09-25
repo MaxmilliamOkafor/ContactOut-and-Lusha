@@ -93,7 +93,8 @@
         "*://*.linkedin.com/sales/*",
         "*://*.linkedin.com/talent/*",
         "*://*.linkedin.com/recruiter/*",
-        "*://*.linkedin.com/mynetwork/*"
+        "*://*.linkedin.com/mynetwork/*",
+        "*://*.linkedin.com/*"
       ],
       "js": ["/app/message_generator.js", "/app/cv_manager.js", "/app/outreach_injector.js"],
       "css": [],
