@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  const AI_REPLY_VERSION = '1.9';
+  const AI_REPLY_VERSION = '2.0';
   const TRAINING_KEY = 'outreach_dm_training_profiles';
   const AI_BTN_CLASS = 'outreach-dm-ai-btn';
   const PANEL_ID = 'outreach-dm-ai-panel';
@@ -171,8 +171,8 @@
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
       .${AI_BTN_CLASS} {
-        display: inline-flex; align-items: center; gap: 6px;
-        padding: 6px 14px; height: 32px;
+        display: inline-flex; align-items: center; gap: 5px;
+        padding: 0 11px; height: 28px;
         background: linear-gradient(135deg, #8B5CF6 0%, #6366F1 50%, #4F46E5 100%);
         border: none; border-radius: 16px;
         color: #fff; font-family: 'Inter', sans-serif;
@@ -188,7 +188,7 @@
       }
       .outreach-dm-controls {
         display: inline-flex; align-items: center; gap: 4px;
-        margin-right: 6px; vertical-align: middle; flex-shrink: 0;
+        margin-right: 4px; vertical-align: middle; flex-shrink: 0;
       }
       .outreach-dm-controls.floating {
         position: fixed !important; bottom: 80px !important; right: 30px !important;
@@ -201,7 +201,15 @@
       }
       .outreach-dm-tone option { color: #111; background: #fff; }
       .outreach-dm-controls > * { flex: 0 0 auto !important; }
-      .outreach-dm-tone { min-width: 104px !important; max-width: none !important; width: auto !important; }
+      .outreach-dm-tone {
+        width: auto !important; min-width: 0 !important; max-width: 112px !important;
+        field-sizing: content; padding: 0 8px !important;
+      }
+      /* Step-down levels, applied only when LinkedIn's own Send would be cut off. */
+      .outreach-dm-controls.fit-1 .${AI_BTN_CLASS} > span:last-child { display: none; }
+      .outreach-dm-controls.fit-1 .${AI_BTN_CLASS} { padding: 0 8px; }
+      .outreach-dm-controls.fit-3 .outreach-dm-gear { display: none !important; }
+      .outreach-dm-controls.fit-4 .outreach-dm-tone { display: none !important; }
       .outreach-dm-send, .outreach-dm-gear {
         min-width: 28px !important; min-height: 28px !important;
         display: inline-flex !important; align-items: center; justify-content: center;
@@ -3218,6 +3226,72 @@
 
 
 
+  // ─── Never crowd out LinkedIn's own buttons ───
+  // After the controls go in, check that LinkedIn's Send (and its menu) is
+  // still fully visible. If not, step down until it is: icon-only AI Reply,
+  // short tone names, hide ⚙ (My details stays on right-click), hide the
+  // tone selector (the saved tone still applies).
+  const TONE_SHORT = { professional: 'Pro', friendly: 'Friendly', casual: 'Casual', direct: 'Direct' };
+
+  function clipRight(el, stopAt) {
+    let right = window.innerWidth;
+    for (let cur = el.parentElement; cur && cur !== document.body; cur = cur.parentElement) {
+      const cs = getComputedStyle(cur);
+      if (cs.overflowX !== 'visible' || cs.overflow !== 'visible') right = Math.min(right, cur.getBoundingClientRect().right);
+      if (cur === stopAt) {
+        right = Math.min(right, cur.getBoundingClientRect().right);
+        break;
+      }
+    }
+    return right;
+  }
+
+  function linkedInButtonsVisible(unit, group) {
+    const btns = [...unit.querySelectorAll('button, [role="button"]')]
+      .filter(b => !group.contains(b) && isVisible(b));
+    if (!btns.length) return true;
+    // The rightmost of LinkedIn's toolbar buttons (Send, or the ⋯ after it).
+    const last = btns.reduce((a, b) => (b.getBoundingClientRect().right > a.getBoundingClientRect().right ? b : a));
+    const send = btns.find(isSendButton) || unit.querySelector('.msg-form__send-button');
+    return [send, last].filter(Boolean).every(b => {
+      const r = b.getBoundingClientRect();
+      if (!r.width) return true;
+      return r.right <= clipRight(b, unit) + 1 && r.left >= unit.getBoundingClientRect().left - 1;
+    });
+  }
+
+  function setFitLevel(group, level) {
+    for (let i = 1; i <= 4; i++) group.classList.toggle('fit-' + i, level >= i);
+    const select = group.querySelector('select.' + TONE_SELECT_CLASS);
+    if (select) {
+      for (const o of select.options) o.textContent = level >= 2 ? TONE_SHORT[o.value] : TONES[o.value];
+    }
+  }
+
+  function fitControls(unit) {
+    if (!unit || !unit.isConnected) return;
+    const group = unit.querySelector('.' + CONTROLS_CLASS);
+    if (!group || group.classList.contains('floating')) return;
+    let level = 0;
+    setFitLevel(group, 0);
+    while (level < 4 && !linkedInButtonsVisible(unit, group)) setFitLevel(group, ++level);
+    group.dataset.fit = String(level);
+  }
+
+  const fitTimers = new WeakMap();
+  function fitControlsSoon(unit) {
+    if (!unit) return;
+    clearTimeout(fitTimers.get(unit));
+    fitTimers.set(unit, setTimeout(() => fitControls(unit), 60));
+    if (window.ResizeObserver && !unit.__outreachFitObserved) {
+      unit.__outreachFitObserved = true;
+      new ResizeObserver(() => {
+        clearTimeout(fitTimers.get(unit));
+        fitTimers.set(unit, setTimeout(() => fitControls(unit), 120));
+      }).observe(unit);
+    }
+  }
+
   function findMsgForms() {
     syncShadowRoots();
     return deepQueryAll(MSG_FORM_SELECTOR)
@@ -3243,6 +3317,7 @@
       if (rootNode !== document) ensureStylesIn(rootNode);
       form.setAttribute(UNIT_ATTR, '1');
       anchor.prepend(createAIControls());
+      fitControlsSoon(form);
       added++;
     }
 
@@ -3256,9 +3331,11 @@
       if (rootNode !== document) ensureStylesIn(rootNode);
       unit.setAttribute(UNIT_ATTR, '1');
       toolbarAnchor(unit, sendBtn).prepend(createAIControls());
+      fitControlsSoon(unit);
       added++;
     }
     if (added) log('Injected AI Reply into', added, 'composer(s)');
+    deepQueryAll('[' + UNIT_ATTR + ']').forEach(u => { if (u.querySelector('.' + CONTROLS_CLASS)) fitControlsSoon(u); });
 
     // Floating fallback: only when a chat composer exists that we could not
     // anchor into (e.g. LinkedIn changed its markup). Never on pages with no
