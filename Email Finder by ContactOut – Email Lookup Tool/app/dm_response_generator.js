@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  const AI_REPLY_VERSION = '1.8';
+  const AI_REPLY_VERSION = '1.9';
   const TRAINING_KEY = 'outreach_dm_training_profiles';
   const AI_BTN_CLASS = 'outreach-dm-ai-btn';
   const PANEL_ID = 'outreach-dm-ai-panel';
@@ -200,6 +200,12 @@
         color: inherit; font: 600 11px 'Inter', sans-serif; cursor: pointer;
       }
       .outreach-dm-tone option { color: #111; background: #fff; }
+      .outreach-dm-controls > * { flex: 0 0 auto !important; }
+      .outreach-dm-tone { min-width: 104px !important; max-width: none !important; width: auto !important; }
+      .outreach-dm-send, .outreach-dm-gear {
+        min-width: 28px !important; min-height: 28px !important;
+        display: inline-flex !important; align-items: center; justify-content: center;
+      }
       .outreach-dm-send {
         width: 28px; height: 28px; border-radius: 50%; border: none;
         background: linear-gradient(135deg, #10B981, #059669); color: #fff;
@@ -1168,9 +1174,9 @@
   // Direct: keep the substance, drop the pleasantries.
   function makeDirect(body) {
     // ("Thanks for connecting" is the point of an accepted-invite message — keep it.)
-    const soft = /^(thanks(?! for connecting)|thank you(?! for connecting)|appreciate|looking forward|happy to share|let me know if|shout if|glad)/i;
+    const soft = /^(thanks(?! for (?:connecting|letting me know|clarifying|pointing))|thank you(?! for connecting)|appreciate|looking forward|happy to share|let me know if|shout if|glad)/i;
     const paras = body.split('\n\n')
-      .map(p => splitSentences(p).filter(s => !soft.test(s)).join(' '))
+      .map(p => splitSentences(p).filter(s => !soft.test(s) || /\bI'll\b|\bI would\b/.test(s)).join(' '))
       .filter(Boolean);
     return paras.length ? paras.join('\n\n') : body;
   }
@@ -1198,7 +1204,7 @@
     // Interview confirmed and now over, not yet thanked → the thank-you,
     // exactly as specified (no tone or other additions).
     const interview = findInterview(conversation.messages || []);
-    if (interview && interview.past && !interview.thanked) {
+    if (interview && interview.past && !interview.thanked && interview.inLatestTurn) {
       meta.intent = 'thankyou';
       const who = interview.interviewer || partnerName;
       return britishise(buildInterviewThankYou(who, interview.role, d.signOffName || 'Maxmilliam'));
@@ -1425,7 +1431,7 @@
     // Detect topics from all messages
     const topicKeywords = {
       job: ['job', 'position', 'role', 'hiring', 'recruit', 'opportunity', 'career', 'opening'],
-      meeting: ['meet', 'call', 'coffee', 'chat', 'schedule', 'calendar', 'zoom', 'teams', 'demo'],
+      meeting: ['meet', 'call', 'coffee', 'chat', 'schedule', 'calendar', 'zoom', 'ms teams', 'microsoft teams', 'teams link', 'teams call', 'demo'],
       product: ['product', 'service', 'platform', 'tool', 'solution', 'software', 'app'],
       collaboration: ['collaborate', 'partner', 'together', 'joint', 'co-', 'synergy'],
       gratitude: ['thanks', 'thank you', 'appreciate', 'grateful'],
@@ -1466,7 +1472,7 @@
     // Did they propose a time? ("I'm free Tuesday at 11am…")
     ctx.proposedSlot = extractProposedSlot(lastMsg.text);
     // Are they offering to help? ("How can I assist you?")
-    ctx.offersHelp = /\bhow (?:can|may|could) i (?:help|assist|be of (?:help|assistance))\b|\bwhat can i do for you\b|\blet me know how i (?:can|could) help\b/i.test(lastMsg.text);
+    ctx.offersHelp = /\bhow (?:can|may|could) i (?:help|assist|be of (?:help|assistance))\b|\bwhat can i do for you\b|\blet me know (?:how|if) i (?:can|could) (?:help|assist)\b|\bif there(?:'s| is) anything i can (?:do|help)\b/i.test(lastMsg.text);
     const platform = lastMsg.text.match(/\b(Microsoft Teams|Teams|Zoom|Google Meet)\b/i);
     ctx.meetingPlatform = platform ? platform[1].replace(/^microsoft /i, '').replace(/^(\w)/, c => c.toUpperCase()) : '';
     ctx.partnerSendsLink = /\bi(?:'ll| will| can)\s+(?:share|send)\b[^.!?]{0,40}\b(?:link|invite|invitation)\b/i.test(lastMsg.text);
@@ -1535,6 +1541,13 @@
     // They asked for specific things → answer each one (unless it's a no).
     const answerable = (ctx.requests || []).filter(r => r.type !== 'cvReceived');
     const keep = ['awaiting', 'objection', 'mismatch', 'interviewConfirmed', 'accepted'];
+    // Respond to what their message actually says, sentence by sentence.
+    const composed = keep.includes(ctx.lastIntent) ? '' : composeFromActs(ctx, ctx.style || 'professional');
+    if (composed) {
+      const body0 = ctx.style === 'direct' ? makeDirect(composed) : composed;
+      const signOff0 = ctx.channel === 'email' ? '\n\n' + signOffFor(ctx, ctx.details || {}) : '';
+      return greeting + '\n\n' + body0 + signOff0;
+    }
     const intent = (!keep.includes(ctx.lastIntent) && (answerable.length || isShortlistRequest((ctx.lastMessage && ctx.lastMessage.text) || '')))
       ? 'answer' : ctx.lastIntent;
 
@@ -1829,6 +1842,8 @@
     if (role) d.currentRole = role[1].trim();
     const seeking = extractSeeking(text);
     if (seeking) d.lookingFor = seeking;
+    const skills = text.match(/\bexperience (?:in|with) ([A-Z][^.\n]{3,120}?)(?=\.|\n|,? and I'm|,? and I am|,? (?:and )?currently|,? (?:and )?looking|$)/);
+    if (skills) d.skills = skills[1].trim();
     const years = text.match(/\b(\d{1,2})\+?\s+years(?: of)?(?: [a-z]+)? experience/i);
     if (years) d.years = years[1];
     return d;
@@ -1862,8 +1877,12 @@
     ['interviewAvailability', /\b(availability for (?:an? )?interview|available (?:for|to) (?:an? )?interview|interview availability)\b/i, true],
     ['timeOptions', /\b(?:suggest|propose|send|share|give me|provide)\b[^.?!]{0,25}\b(?:times?|dates?|slots?)\b|\bwhat (?:dates?|times?|days?) (?:would |could )?(?:work|suit|are good)|\b(?:dates?|times?|slots?) that (?:work|suit)/i, true],
     ['availability', /\b(when (?:are|would) you (?:be )?(?:free|available)|your availability|good time (?:for|to)|what time works|free for a (?:quick )?(?:call|chat)|available for a (?:quick )?(?:call|chat)|(?:schedule|set up|arrange|book) a (?:quick )?(?:call|chat|time|meeting)|(?:jump|hop) on a (?:quick )?call)\b/i, true],
-    ['experience', /\b(experience (?:with|in)|worked with|familiar with|background in|hands-on with)\b/i, true],
-    ['interest', /\b(interested in|open to|would you consider|keen on)\b[^.?!]{0,40}\b(role|position|opportunit\w*|job|move|change)\b|\bare you (?:still )?(?:looking|open to new|interested)\b/i, true],
+    ['contractPerm', /\bcontract\b[^.?!]{0,30}\b(?:or|vs\.?|versus)\b[^.?!]{0,20}\bperm|\bperm\w*\b[^.?!]{0,30}\b(?:or|vs\.?|versus)\b[^.?!]{0,20}\bcontract|\bopen to contract\b/i, true],
+    ['whyLeaving', /\bwhy are you (?:looking|leaving|moving)|\bwhy (?:do you want to|would you) (?:leave|move)|\breason for (?:leaving|looking)/i, true],
+    ['seeking', /\bwhat (?:kind|type|sort) of (?:roles?|compan(?:y|ies)|positions?|work|opportunit\w*)|\bwhat (?:are|were) you (?:looking for|after|hoping for)|\bwhat roles?\b[^.?!]{0,20}\b(?:interest|looking|targeting)/i, true],
+    ['workingOn', /\bwhat are you (?:working on|up to|doing)\b|\bwhat(?:'s| is) your current (?:role|position|job)\b|\bwhat do you do\b/i, true],
+    ['experience', /\b(experience (?:with|in|of|leading|managing|building|working)|worked with|familiar with|background in|hands-on with)\b/i, true],
+    ['interest', /\b(interested in|open to|would you consider|keen on)\b[^.?!]{0,40}\b(role|position|opportunit\w*|job|move|change)\b|(?<!\b(?:what|why|where|how)\b[^.?!]{0,12})\bare you (?:still )?(?:looking|open to new|interested)\b|\bbe of interest\b|\bsound(?:s)? (?:of interest|interesting)\?/i, true],
   ];
 
   // [{ type, sentence }] in the order they were asked, one per type.
@@ -1961,7 +1980,7 @@
         return { text: asSentence(d.interviewAvailability || 'I am available to attend interviews at your convenience.') };
       case 'availability':
         return d.calendarLink
-          ? { text: `Here is my booking link, feel free to pick any slot that suits: ${d.calendarLink}` }
+          ? { text: `${/\b(?:do you have|are you free|can we|could we|shall we|would you be (?:free|available))\b/i.test(req.sentence) ? 'Yes, happy to speak. ' : ''}Here is my booking link, feel free to pick any slot that suits: ${d.calendarLink}` }
           : { text: timeOptionsText(d) };
       case 'timeOptions':
         return { text: timeOptionsText(d) };
@@ -1977,12 +1996,38 @@
           out.push(`Yes, I've worked with ${joinList(known)}${yrs}.`);
         }
         if (unknown.length) out.push(`I pick up new tools quickly, so ${joinList(unknown)} wouldn't be a problem.`);
-        return { text: out.join(' ') || "Yes, and I'm happy to go into specifics on a call." };
+        if (out.length) return { text: out.join(' ') };
+        // A broader topic ("distributed systems", "leading teams"): say what
+        // I've told people about my background, and offer the detail.
+        const topic = ((req.sentence.match(/\bexperience ((?:with|in|of) [^?.!,]{3,60}|(?:leading|managing|building|working)[^?.!,]{3,60})/i) || [])[1] || '')
+          .replace(/^(?:with|in|of)\s+/i, '').trim();
+        const bg = d.currentRole
+          ? `I have ${d.years ? d.years + " years' experience" : 'experience'} as ${/^[aeiou]/i.test(d.currentRole) ? 'an' : 'a'} ${d.currentRole}${d.skills ? ', mostly with ' + d.skills : ''}.`
+          : '';
+        return { text: [bg, `Happy to go through my experience${topic ? ' with ' + topic.replace(/^(leading|managing|building|working)/i, m => m.toLowerCase()) : ''} in more detail on a call.`].filter(Boolean).join(' ').replace('experience with leading', 'experience leading').replace('experience with managing', 'experience managing').replace('experience with building', 'experience building').replace('experience with working', 'experience working') };
       }
-      case 'interest':
+      case 'contractPerm':
+        return { text: "I'm open to both contract and permanent roles." };
+      case 'whyLeaving':
+        return { text: `I'm looking for a new challenge${d.lookingFor ? ', ideally in ' + d.lookingFor : ''}, with more scope to grow.` };
+      case 'seeking':
+        return { text: d.lookingFor ? `I'm looking for ${d.lookingFor}.` : "I'm open to roles that fit my background and am happy to talk through what I'm looking for on a call." };
+      case 'workingOn':
+        return { text: d.currentRole
+          ? `At the moment I'm working as ${/^[aeiou]/i.test(d.currentRole) ? 'an' : 'a'} ${d.currentRole}${d.lookingFor ? ' and exploring ' + d.lookingFor : ''}.`
+          : "Happy to tell you more about what I'm working on over a call." };
+      case 'interest': {
+        // Name the role they mentioned, so the reply is clearly about it.
+        const theirs = (ctx.lastMessage && ctx.lastMessage.text) || '';
+        const rm = theirs.match(/\b((?:[A-Z][\w/+.#-]*\s){1,5})(?:opening|role|position|vacancy|opportunity)\b(?:\s+(?:at|with)\s+([A-Z][\w&.-]*(?:\s[A-Z][\w&.-]*)?))?/);
+        if (rm && !/^(?:The|This|That|A|An|Our|New|Any)\s*$/.test(rm[1])) {
+          const role = rm[1].trim().replace(/^(?:The|This|That|A|An|Our|New)\s+/, '');
+          return { text: `Yes, the ${role} role${rm[2] ? ' at ' + rm[2] : ''} sounds like a good fit for what I'm looking for.` };
+        }
         return (d.lookingFor)
           ? { text: `Yes, I'm open to it. It sounds in line with the ${d.lookingFor} I'm looking for.` }
           : { text: "Yes, I'm open to hearing more." };
+      }
       default:
         return { text: '' };
     }
@@ -2249,6 +2294,8 @@
       const uniq = [...new Set(named)].filter(n => !notNames.test(n));
       return {
         when,
+        // Nothing from them since the confirmation (my own replies aside).
+        inLatestTurn: !messages.slice(i + 1).some(x => x.isMe === false),
         past: now.getTime() > when.end.getTime(),
         thanked,
         role: role ? role.trim() : '',
@@ -2380,6 +2427,168 @@
     return score >= 2 && score > english ? best : '';
   }
 
+  // ═══════════════════════════════════════════
+  //  READ-AND-RESPOND
+  //  Go through their latest message sentence by sentence and respond to
+  //  what each one says: an instruction ("use the link from Abdu on Tuesday
+  //  at 12:00"), a promise ("I'll send prep"), a reminder, a "no" ("the role
+  //  has been filled"), a referral, good news, a sign-off. Questions are
+  //  answered by answerRequest. Nothing here is a canned reply: every line
+  //  is built from words in their message.
+  // ═══════════════════════════════════════════
+
+  // "Tuesday at 12:00", "Tuesday morning", "4pm today", "tomorrow"
+  function extractWhen(s) {
+    const cap = w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+    const fmt = d => (/^(today|tomorrow|tonight)$/i.test(d) ? d.toLowerCase() : cap(d));
+    const timeFirst = s.match(/\b(\d{1,2}(?::\d{2})?\s?(?:am|pm))\s+(?:on\s+)?(today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+    if (timeFirst) return { text: `${timeFirst[1].replace(/\s+/g, '')} ${fmt(timeFirst[2])}`, relative: /today|tomorrow|tonight/i.test(timeFirst[2]), timeFirst: true };
+    const m = s.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|tonight)\b(?:\s+(morning|afternoon|evening))?(?:\s+(?:at|@)\s+(\d{1,2}(?::\d{2})?\s?(?:am|pm)?))?/i);
+    if (!m) return null;
+    let text = fmt(m[1]);
+    if (m[2]) text += ' ' + m[2].toLowerCase();
+    if (m[3]) text += ' at ' + m[3].replace(/\s+/g, '');
+    return { text, relative: /^(today|tomorrow|tonight)$/i.test(m[1]), timeFirst: false };
+  }
+  const onWhen = w => (w ? (w.relative || w.timeFirst ? ' ' + w.text : ' on ' + w.text) : '');
+
+  // The acts in their latest turn, in order. Each: { kind, text, key }.
+  function readActs(text) {
+    const acts = [];
+    const seen = new Set();
+    const add = (kind, line, key) => {
+      const k = key || kind;
+      if (!line || seen.has(k)) return;
+      seen.add(k);
+      acts.push({ kind, text: line });
+    };
+
+    for (const s of splitSentences(text)) {
+      const q = /\?\s*$/.test(s);
+      const when = extractWhen(s);
+
+      // ── A "no": role filled, nothing open, not progressing ──
+      if (/\b(?:role|position|vacancy|job) (?:has been|was|is(?: now)?|has now been) (?:filled|closed|withdrawn|put on hold)|\b(?:don't|do not|doesn't|does not) have any\b[^.]{0,40}\b(?:roles?|openings?|positions?|vacancies|opportunities)|\bno (?:suitable |relevant |open )?(?:roles?|openings?|vacancies|positions?)\b|\bnot (?:be )?(?:moving|progressing|proceeding|taking)\b[^.]{0,30}\b(?:forward|further)|\bunsuccessful\b|\b(?:decided|chosen) to (?:go|move forward|proceed) with (?:another|other|a different)|\bnot (?:hiring|recruiting) (?:at the moment|right now|currently)|\bhiring freeze\b/i.test(s)) {
+        const onFile = /keep (?:you|your (?:profile|cv|details))\b[^.]*(?:on file|in mind)|bear you in mind|reach out if/i.test(text);
+        add('decline', onFile
+          ? 'Thanks for letting me know, and for keeping me in mind. I would be glad to hear from you if anything suitable comes up.'
+          : 'Thanks for letting me know. Please do keep me in mind if anything suitable comes up.');
+        continue;
+      }
+
+      // ── A referral: "speak to my colleague Laura Evans" ──
+      const ref = s.match(/\b(?:speak|talk|reach out|get in touch|connect|chat) (?:to|with)\b[^.]{0,30}?\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\b/) ||
+        s.match(/\b(?:contact|message|email|try|ask)\s+(?:my colleague\s+|our\s+\w+\s+)?([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\b/);
+      if (ref && !/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Teams|Zoom|LinkedIn|Google|I)$/.test(ref[1].split(' ')[0]) && !q) {
+        add('referral', `Thanks for pointing me in the right direction. I'll get in touch with ${ref[1]}.`);
+        continue;
+      }
+      if (/\bnot the (?:right|best) person\b/i.test(s)) {
+        add('referral', 'Thanks for letting me know. Could you point me to the right person to speak to?');
+        continue;
+      }
+
+      // ── Good news: next stage ──
+      if (/\bnext (?:stage|round|step)\b|\bmove (?:you )?forward\b|\bprogress(?:ing)? you\b|\bshortlisted\b|\b(?:second|final|technical) (?:interview|round|stage)\b/i.test(s) && !/\bnot\b/i.test(s)) {
+        add('progress', "That's great news, thank you.");
+        // fall through: the same sentence may ask for availability
+      }
+
+      // ── A reminder of something already booked ──
+      if (/\breminder\b|\b(?:we|you) (?:did |do |still )?have (?:a |an |our )?(?:call|meeting|interview|chat)\b[^.]{0,30}\b(?:scheduled|booked|arranged|planned|at|for)\b/i.test(s) && when) {
+        add('reminder', `Yes, ${when.text} still works for me.`);
+        continue;
+      }
+      if (seen.has('reminder') && /\breschedul/i.test(s)) continue; // answered by the line above
+
+      // ── An instruction to me: "please use the link from Abdu" ──
+      const ins = s.match(/\bplease\s+(use|join|complete|fill (?:in|out)|bring|review|read|check|accept|sign|apply|register|download|prepare)\b|\bcould you (?:please )?(fill (?:in|out)|complete|sign|apply|register)\b|\byou(?:'ll| will)? need to (use|join|complete|fill (?:in|out)|bring|sign|apply|register)\b/i);
+      if (ins && !isShortlistRequest(text)) {
+        const verb = (ins[1] || ins[2] || ins[3]).toLowerCase();
+        const lead = /\bas i understand\b|\bto clarify\b|\bjust to (?:confirm|clarify)\b|\bapologies for the confusion\b/i.test(s) ? 'Thanks for clarifying. ' : 'Understood. ';
+        let line;
+        if (verb === 'use' && /\blink\b/i.test(s)) {
+          const from = (s.match(/\bfrom ([A-Z][a-z]+)\b/) || [])[1];
+          line = `I'll use the link${from ? ' from ' + from : ''}${/\binterview/i.test(text) ? ' for the interview' : ''}${onWhen(when)}.`;
+        } else if (verb === 'join') {
+          line = `I'll join${onWhen(when)}.`;
+        } else if (/^(complete|fill|apply|register|sign)/.test(verb)) {
+          const what = /\bapplication\b|\bapply\b/i.test(s) ? 'the application' : /\bform\b/i.test(s) ? 'the form' : /\bcontract\b|\boffer\b/i.test(s) ? 'it' : 'that';
+          line = `I'll ${verb.startsWith('sign') ? 'sign' : 'complete'} ${what} shortly.`;
+        } else {
+          line = "I'll do that.";
+        }
+        add('instruction', lead + line);
+        continue;
+      }
+
+      // ── Their own next steps: "I'll send prep… and call you Tuesday morning" ──
+      const promises = /\b(?:i|we|she|he|they)(?:'ll| will| shall|'m going to| am going to)\b|\b(?:i|we)(?:'ve| have)(?: just| already| now)? (?:forwarded|passed|sent|shared|submitted|put forward)\b/i.test(s);
+      if (promises && !q) {
+        const bits = [];
+        if (/\b(?:forwarded|passed|sent|shared|submitted|put forward)\b[^.]{0,30}\b(?:cv|resume|profile|details|application)\b/i.test(s)) {
+          bits.push('thanks for passing my CV on');
+        }
+        const sent = s.match(/\b(?:send|share|email|forward)\b(?:\s+(?:you|over|across|through))*\s+(?:the |some |an? |additional |more |further |your )*((?:[a-z]+ ){0,2}?(?:prep|details|information|info|invite|invitation|link|job description|jd|spec|contract|offer|feedback|update|pack|brief|materials?|questions|agenda))\b/i);
+        if (sent) bits.push(`I'll look out for the ${sent[1].trim().toLowerCase()}`);
+        else if (/\b(?:send|share|email|forward) (?:it|that|this|them|those)\b/i.test(s)) bits.push("I'll keep an eye out for it");
+        if (/\b(?:give you a call|call you|ring you|phone you|give you a ring|check in)\b/i.test(s)) {
+          bits.push(`speak to you${when ? onWhen(extractWhen(s.slice(s.search(/\b(?:give you a call|call you|ring you|phone you|give you a ring|check in)\b/i))) || when) : ' then'}`);
+        }
+        if (/\b(?:be in touch|get back|come back|let you know|take a look|review|update you|keep you (?:posted|updated))\b/i.test(s)) {
+          bits.push(/\b(?:she|he|they)(?:'ll| will)\b/i.test(s) ? 'I look forward to hearing from them' : 'I look forward to hearing from you');
+        }
+        if (bits.length) {
+          let line = bits.join(', and ').replace(/, and (?=[^,]*, and )/, ', ');
+          line = /^thanks/.test(line) ? 'T' + line.slice(1) : 'Thanks, ' + line;
+          add('promise', line + '.', 'promise:' + bits.join('|'));
+          continue;
+        }
+      }
+
+      // ── A warm sign-off to return ──
+      const wish = s.match(/\b(?:have|enjoy) (?:a|an|your|the rest of your) (great|good|lovely|nice|wonderful|fantastic) (evening|day|weekend|week|night|afternoon)\b/i);
+      if (wish) add('wish', `Have a ${wish[1].toLowerCase()} ${wish[2].toLowerCase()} too.`);
+    }
+    return acts;
+  }
+
+  // Build the reply from the acts plus answers to anything they asked.
+  // Returns '' when their message holds none of these (other paths apply).
+  function composeFromActs(ctx, style) {
+    const theirs = (ctx.lastMessage && ctx.lastMessage.text) || '';
+    if (!theirs || isShortlistRequest(theirs)) return '';
+    const acts = readActs(theirs);
+    const substantive = acts.filter(a => a.kind !== 'wish');
+    if (!substantive.length) return '';
+
+    const d = ctx.details || {};
+    const kinds = acts.map(a => a.kind);
+    const lines = substantive.map(a => a.text);
+
+    // Their questions, answered — unless the act already settled them.
+    const types = (ctx.requests || []).map(r => r.type);
+    for (const req of ctx.requests || []) {
+      if (req.type === 'cvReceived') continue;
+      if (req.type === 'availability' && (kinds.includes('reminder') || types.includes('timeOptions'))) continue;
+      if (kinds.includes('decline') && ['interest', 'availability'].includes(req.type)) continue;
+      const a = answerRequest(req, ctx, d);
+      if (a.text) lines.push(a.text);
+    }
+
+    const wish = acts.find(a => a.kind === 'wish');
+    // One "Thanks" per reply is plenty.
+    let thanked = false;
+    for (let i = 0; i < lines.length; i++) {
+      if (!/^Thanks\b/.test(lines[i])) continue;
+      if (thanked) lines[i] = lines[i].replace(/^Thanks, (\w)/, (m, c) => c.toUpperCase());
+      thanked = true;
+    }
+    let body = lines.join('\n');
+    if (wish && style !== 'direct') body += '\n\n' + wish.text;
+    return body;
+  }
+
   function buildColdOutreach(name, tone, goal, profile, ctx) {
     const company = (ctx && ctx.partnerCompany) || '';
     const greeting = pick({
@@ -2457,6 +2666,13 @@
         ? `Happy to go through numbers. It depends a little on your setup, so a quick call is easiest. What works this week?`
         : `Happy to go through numbers properly. Pricing depends on a couple of things specific to your setup, so a generic figure here wouldn't be much use. A short call and I can give you something realistic. What works this week?`;
     }
+    // A question about one specific fact (which / when / who…) gets a
+    // visible blank to fill; an open one gets a polite deferral.
+    const qs = ((raw.match(/[^.!?\n]*\?/g)) || []).map(q => q.replace(/\s+/g, ' ').trim()).filter(q => q.length > 3);
+    const lastQ = qs.length ? qs[qs.length - 1] : '';
+    if (/^(?:and |so |also )?(?:which|who|when|where|what(?:'s| is| was| are| were)?|how (?:many|much|long|soon))\b/i.test(lastQ) && lastQ.length <= 90) {
+      return `[Your answer to: ${lastQ}]`;
+    }
     // "Are you open to new roles?" → yes, tell me more.
     if (t.includes('job')) {
       return casual
@@ -2467,8 +2683,8 @@
     // Anything else: we can't know the answer, so politely defer rather
     // than invent one.
     return ctx.style === 'direct'
-      ? "Happy to go into that on a call."
-      : "Good to go into that properly. Happy to cover it on a call if that works for you.";
+      ? 'Happy to go through that on a call.'
+      : "Happy to go through that on a call, whenever suits you.";
   }
 
   function buildObjectionReply(ctx, tone, goal) {
