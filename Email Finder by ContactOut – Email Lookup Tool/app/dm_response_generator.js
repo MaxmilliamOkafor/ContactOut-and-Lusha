@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  const AI_REPLY_VERSION = '2.0';
+  const AI_REPLY_VERSION = '2.1';
   const TRAINING_KEY = 'outreach_dm_training_profiles';
   const AI_BTN_CLASS = 'outreach-dm-ai-btn';
   const PANEL_ID = 'outreach-dm-ai-panel';

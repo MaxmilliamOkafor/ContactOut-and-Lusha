@@ -12,6 +12,21 @@
   const STORAGE_KEY = 'CO__scout_badge_position';
 
   let observer = null;
+  let ui = null; // shadow root holding the badge and the results panel
+
+  // A host the page can't style: closed off with `all: initial` and a
+  // shadow root, so site CSS (e.g. broad `div { width: 100% }` rules on
+  // bank pages) can't stretch or move the badge.
+  function getUI() {
+    if (ui) return ui;
+    const host = document.createElement('div');
+    host.id = 'CO__scout_host';
+    host.style.cssText = 'all: initial; position: fixed; top: 0; left: 0; width: 0; height: 0; z-index: 2147483640;';
+    document.documentElement.appendChild(host);
+    ui = host.attachShadow({ mode: 'open' });
+    return ui;
+  }
+  const $id = id => (ui && ui.getElementById(id)) || null;
   let detectedContacts = [];
   let badgeSide = 'right';
   let badgePosition = { top: '50%' };
@@ -173,7 +188,7 @@
 
   // --- Draggable Badge UI ---
   function createBadge() {
-    if (document.getElementById(BADGE_WRAPPER_ID)) return;
+    if ($id(BADGE_WRAPPER_ID)) return;
 
     // Load saved position
     try {
@@ -211,9 +226,9 @@
         <div style="color: rgba(255,255,255,0.7); font-size: 8px; font-family: Arial, sans-serif; writing-mode: vertical-lr; text-orientation: mixed; letter-spacing: 1px;">SCOUT</div>
       </div>
     `;
-    document.body.appendChild(wrapper);
+    getUI().appendChild(wrapper);
 
-    const badgeMain = document.getElementById(BADGE_MAIN_ID);
+    const badgeMain = $id(BADGE_MAIN_ID);
 
     // Click handler
     badgeMain.addEventListener('click', (e) => {
@@ -244,7 +259,7 @@
   function startDrag(e) {
     isDragging = false;
     dragStartY = e.clientY;
-    dragStartTop = parseInt(document.getElementById(BADGE_MAIN_ID).style.top) || window.innerHeight / 2;
+    dragStartTop = parseInt($id(BADGE_MAIN_ID).style.top) || window.innerHeight / 2;
     e.preventDefault();
   }
 
@@ -253,7 +268,7 @@
     const diff = Math.abs(e.clientY - dragStartY);
     if (diff > 5) isDragging = true;
     if (isDragging) {
-      const badge = document.getElementById(BADGE_MAIN_ID);
+      const badge = $id(BADGE_MAIN_ID);
       const newTop = Math.max(50, Math.min(window.innerHeight - 50, dragStartTop + (e.clientY - dragStartY)));
       badge.style.top = newTop + 'px';
     }
@@ -261,7 +276,7 @@
 
   function endDrag(e) {
     if (isDragging) {
-      const badge = document.getElementById(BADGE_MAIN_ID);
+      const badge = $id(BADGE_MAIN_ID);
       badgePosition.top = badge.style.top;
       savePosition();
       setTimeout(() => { isDragging = false; }, 100);
@@ -270,7 +285,7 @@
   }
 
   function switchSide() {
-    const badge = document.getElementById(BADGE_MAIN_ID);
+    const badge = $id(BADGE_MAIN_ID);
     badgeSide = badgeSide === 'right' ? 'left' : 'right';
     badge.style.right = badgeSide === 'right' ? '0' : 'auto';
     badge.style.left = badgeSide === 'left' ? '0' : 'auto';
@@ -285,13 +300,14 @@
   }
 
   function updateBadgeCount(count) {
-    const el = document.getElementById('CO__scout_badge_count');
+    if (count > 0 && !$id(BADGE_WRAPPER_ID)) createBadge();
+    const el = $id('CO__scout_badge_count');
     if (el) el.textContent = count;
   }
 
   // --- Results Frame ---
   function toggleFrame() {
-    let frame = document.getElementById(FRAME_ID);
+    let frame = $id(FRAME_ID);
     if (frame) {
       frame.style.display = frame.style.display === 'none' ? 'block' : 'none';
       return;
@@ -318,10 +334,10 @@
       animation: CO_slideIn 0.3s ease;
     `;
     frame.innerHTML = buildFrameContent();
-    document.body.appendChild(frame);
+    getUI().appendChild(frame);
 
     // Add animation style
-    if (!document.getElementById('CO__scout_styles')) {
+    if (!$id('CO__scout_styles')) {
       const style = document.createElement('style');
       style.id = 'CO__scout_styles';
       style.textContent = `
@@ -330,7 +346,7 @@
           to { opacity: 1; transform: translateX(0); }
         }
       `;
-      document.head.appendChild(style);
+      getUI().appendChild(style);
     }
 
     attachFrameHandlers();
@@ -403,20 +419,20 @@
   }
 
   function attachFrameHandlers() {
-    const closeBtn = document.getElementById('CO__scout_close');
+    const closeBtn = $id('CO__scout_close');
     if (closeBtn) {
       closeBtn.addEventListener('click', () => {
-        const frame = document.getElementById(FRAME_ID);
+        const frame = $id(FRAME_ID);
         if (frame) frame.style.display = 'none';
       });
     }
 
-    const rescanBtn = document.getElementById('CO__scout_rescan');
+    const rescanBtn = $id('CO__scout_rescan');
     if (rescanBtn) {
       rescanBtn.addEventListener('click', () => {
         scanPageForContacts();
         updateBadgeCount(detectedContacts.length);
-        const frame = document.getElementById(FRAME_ID);
+        const frame = $id(FRAME_ID);
         if (frame) {
           frame.innerHTML = buildFrameContent();
           attachFrameHandlers();
@@ -424,7 +440,7 @@
       });
     }
 
-    document.querySelectorAll('.co-scout-enrich').forEach(btn => {
+    getUI().querySelectorAll('.co-scout-enrich').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const idx = parseInt(e.target.getAttribute('data-index'));
         const contact = detectedContacts[idx];
@@ -439,7 +455,7 @@
       });
     });
 
-    const enrichAllBtn = document.getElementById('CO__scout_enrich_all');
+    const enrichAllBtn = $id('CO__scout_enrich_all');
     if (enrichAllBtn) {
       enrichAllBtn.addEventListener('click', () => {
         detectedContacts.forEach(c => {
@@ -464,6 +480,7 @@
     observer = new MutationObserver(() => {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
+        if (isSensitivePage()) return shutDown();
         const newContacts = scanPageForContacts();
         updateBadgeCount(newContacts.length);
       }, 2000);
@@ -475,49 +492,49 @@
     });
   }
 
-  // --- Bulk Auto-Reveal ---
-  function bulkRevealHiddenContacts() {
-    // Click "show email", "reveal", "view contact" type buttons
-    const revealSelectors = [
-      'button[class*="reveal"]', 'button[class*="show"]',
-      'a[class*="reveal"]', 'a[class*="show-email"]',
-      '[data-action="reveal"]', '[data-action="show-contact"]',
-      'button:not([disabled])'
-    ];
+  // --- Pages Scout must never touch ---
+  // Banks, payment providers, card checks (3-D Secure), checkouts, sign-in
+  // and government pages: no badge, no scanning, nothing injected.
+  const SENSITIVE_DOMAINS = /(^|\.)(aib\.ie|boi\.com|bankofireland\.com|ptsb\.ie|ulsterbank\.(ie|co\.uk)|kbc\.ie|an\.post|revolut\.com|monzo\.com|starlingbank\.com|wise\.com|n26\.com|bunq\.com|paypal\.(com|me)|stripe\.(com|network)|klarna\.com|barclays\.(co\.uk|com)|barclaycard\.co\.uk|hsbc\.(co\.uk|com)|lloydsbank\.com|natwest\.com|rbs\.co\.uk|santander\.(co\.uk|com)|halifax\.co\.uk|nationwide\.co\.uk|tsb\.co\.uk|metrobankonline\.co\.uk|chase\.(com|co\.uk)|wellsfargo\.com|bankofamerica\.com|citi(bank)?\.com|capitalone\.(com|co\.uk)|americanexpress\.com|amex\.\w+|visa\.\w+|mastercard\.\w+|adyen\.com|checkout\.com|worldpay\.com|sumup\.com|squareup\.com|gocardless\.com|cardinalcommerce\.com|arcot\.com|securesuite\.\w+|gov\.uk|gov\.ie|revenue\.ie|welfare\.ie|hmrc\.gov\.uk|nhs\.uk|hse\.ie)$/i;
+  const SENSITIVE_HOST_WORDS = new Set(['bank', 'banking', 'ebanking', 'onlinebanking', 'netbanking', 'pay', 'payment', 'payments', 'checkout', 'wallet', 'secure', 'securepay', 'securecode', '3ds', 'acs', 'login', 'signin', 'auth', 'sso', 'idp', 'accounts']);
+  const SENSITIVE_PATH = /\/(login|log-in|signin|sign-in|auth|oauth|sso|checkout|payment|payments|pay|billing|3ds|acs|secure|verify|password)(\/|$|\?|#)/i;
+  const SENSITIVE_TEXT = /confirm your purchase|3-?d secure|verified by visa|mastercard (identity check|securecode)|one[- ]time (passcode|password)|card ?verification|enter your pin|authori[sz]e (this|the) (payment|purchase|transaction)/i;
 
-    revealSelectors.forEach(selector => {
-      document.querySelectorAll(selector).forEach(el => {
-        const text = el.textContent.toLowerCase();
-        if (text.includes('reveal') || text.includes('show email') ||
-            text.includes('show contact') || text.includes('view email') ||
-            text.includes('unlock')) {
-          el.click();
-        }
-      });
-    });
+  function isSensitivePage() {
+    const host = window.location.hostname;
+    if (SENSITIVE_DOMAINS.test(host)) return true;
+    if (host.split(/[.-]/).some(w => SENSITIVE_HOST_WORDS.has(w.toLowerCase()))) return true;
+    if (SENSITIVE_PATH.test(window.location.pathname)) return true;
+    if (document.querySelector('input[type="password"], input[autocomplete^="cc-"], input[name*="cardnumber" i], input[name*="card_number" i], input[autocomplete="one-time-code"]')) return true;
+    const text = ((document.body && document.body.innerText) || '').slice(0, 6000);
+    return SENSITIVE_TEXT.test(text);
+  }
+
+  function shutDown() {
+    if (observer) observer.disconnect();
+    observer = null;
+    const host = document.getElementById('CO__scout_host');
+    if (host) host.remove();
+    ui = null;
   }
 
   // --- Init ---
   function init() {
+    if (window !== window.top) return;
     // Don't run on LinkedIn or ContactOut (those have dedicated scripts)
     const host = window.location.hostname;
     if (host.includes('linkedin.com') || host.includes('contactout.com') ||
         host.includes('github.com') || host.includes('hubspot.com') ||
         host.includes('calendar.google.com') || host.includes('outlook.live.com') ||
-        host.includes('outlook.office.com')) {
+        host.includes('outlook.office.com') || host === 'mail.google.com') {
       return;
     }
+    if (isSensitivePage()) return;
 
-    console.log('[ContactOut] Scout mode active on', host);
-    createBadge();
-
-    // Initial scan after page load
+    // Scan after load; the badge appears only if the page has contacts.
     setTimeout(() => {
-      const contacts = scanPageForContacts();
-      updateBadgeCount(contacts.length);
-
-      // Auto-reveal hidden contacts
-      bulkRevealHiddenContacts();
+      if (isSensitivePage()) return shutDown();
+      updateBadgeCount(scanPageForContacts().length);
     }, 2000);
 
     observePageChanges();
