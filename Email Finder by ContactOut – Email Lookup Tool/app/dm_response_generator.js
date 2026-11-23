@@ -13,7 +13,7 @@
 (function () {
   'use strict';
 
-  const AI_REPLY_VERSION = '2.1';
+  const AI_REPLY_VERSION = '2.2';
   const TRAINING_KEY = 'outreach_dm_training_profiles';
   const AI_BTN_CLASS = 'outreach-dm-ai-btn';
   const PANEL_ID = 'outreach-dm-ai-panel';
@@ -202,7 +202,7 @@
       .outreach-dm-tone option { color: #111; background: #fff; }
       .outreach-dm-controls > * { flex: 0 0 auto !important; }
       .outreach-dm-tone {
-        width: auto !important; min-width: 0 !important; max-width: 112px !important;
+        width: auto !important; min-width: 0 !important; max-width: 104px !important;
         field-sizing: content; padding: 0 8px !important;
       }
       /* Step-down levels, applied only when LinkedIn's own Send would be cut off. */
@@ -3011,7 +3011,8 @@
       await insertAndSend(send, btn);
     });
 
-    group.append(btn, select, send, createDetailsButton());
+    // LinkedIn's own Send sends the message; no second send button here.
+    group.append(btn, select, createDetailsButton());
     return group;
   }
 
@@ -3253,11 +3254,21 @@
     // The rightmost of LinkedIn's toolbar buttons (Send, or the ⋯ after it).
     const last = btns.reduce((a, b) => (b.getBoundingClientRect().right > a.getBoundingClientRect().right ? b : a));
     const send = btns.find(isSendButton) || unit.querySelector('.msg-form__send-button');
-    return [send, last].filter(Boolean).every(b => {
+    const inView = [send, last].filter(Boolean).every(b => {
       const r = b.getBoundingClientRect();
       if (!r.width) return true;
       return r.right <= clipRight(b, unit) + 1 && r.left >= unit.getBoundingClientRect().left - 1;
     });
+    if (!inView) return false;
+    // No sideways scrollbar or overflow from the toolbar up to the chat pane.
+    let cur = group.parentElement;
+    for (let i = 0; cur && i < 8 && cur !== document.body; i++, cur = cur.parentElement) {
+      if (cur.scrollWidth > cur.clientWidth + 1 && getComputedStyle(cur).overflowX !== 'visible') return false;
+      if (cur === unit) break;
+    }
+    const pane = paneFor(unit.querySelector('[contenteditable="true"], textarea'));
+    if (pane && pane.scrollWidth > pane.clientWidth + 1) return false;
+    return true;
   }
 
   function setFitLevel(group, level) {
